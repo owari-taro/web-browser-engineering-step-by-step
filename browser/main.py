@@ -5,6 +5,7 @@ import tkinter
 
 WIDTH, HEIGHT = 800, 600
 HSTEP, VSTEP = 13, 18  # 水平・垂直ステップ
+SCROLL_STEP = 100
 
 
 class URL:
@@ -101,24 +102,49 @@ def lex(body):
     return text
 
 
+# テキストのレイアウトを行い、ディスプレイリスト(display_list)を返す関数
+def layout(text):
+    display_list = []
+    cursor_x, cursor_y = HSTEP, VSTEP
+    for c in text:
+        # 文字とその座標をdisplay listに追加
+        display_list.append((cursor_x, cursor_y, c))
+        cursor_x += HSTEP
+        if cursor_x >= WIDTH - HSTEP:
+            cursor_y += VSTEP
+            cursor_x = HSTEP
+    return display_list
+
+
 class Browser:
     def __init__(self):
         self.window = tkinter.Tk()
         self.canvas = tkinter.Canvas(self.window, width=WIDTH, height=HEIGHT)
         self.canvas.pack()
+        # スクロール位置を初期化
+        self.scroll = 0
+        # 下矢印キーにscrolldownメソッドをバインド
+        self.window.bind("<Down>", self.scrolldown)
+
+    def scrolldown(self, e):
+        self.scroll += SCROLL_STEP
+        self.draw()  # 再描画
 
     # URLからWebページを読み込み、表示する関数
     def load(self, url):
         body = url.request()
         text = lex(body)
-        cursor_x, cursor_y = HSTEP, VSTEP  # カーソル位置を初期化
-        for c in text:
-            self.canvas.create_text(cursor_x, cursor_y, text=c)
-            cursor_x += HSTEP
-            # カーソルが右端を超えたら改行
-            if cursor_x >= WIDTH - HSTEP:
-                cursor_y += VSTEP
-                cursor_x = HSTEP
+        self.display_list = layout(text)
+        # ディスプレイリストdisplay listを描画
+        self.draw()
+
+    # ディスプレイリスト display listに基づいてキャンバスに描画するメソッド
+    def draw(self):
+        # 描画前にキャンバスをクリア
+        self.canvas.delete("all")
+        for x, y, c in self.display_list:
+            # スクロール位置を考慮して文字を描画
+            self.canvas.create_text(x, y - self.scroll, text=c)
 
 
 if __name__ == "__main__":
