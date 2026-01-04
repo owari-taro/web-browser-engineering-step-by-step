@@ -62,3 +62,31 @@ class URL:
         # ... (ボディ読み取り、ソケットクローズ)
         # レスポンスのボディを返します
         return content
+
+
+# HTML本文を表示する関数
+def show(body):
+    in_tag = False
+    for c in body:
+        if c == "<":
+            # タグの開始
+            in_tag = True
+        elif c == ">":
+            # タグの終了
+            in_tag = False
+        elif not in_tag:
+            # タグの外の文字を出力
+            print(c, end="")
+
+
+# URLからWebページを読み込み、表示する関数
+def load(url):
+    body = url.request()
+    show(body)
+
+
+if __name__ == "__main__":
+    import sys
+
+    # コマンドライン引数からURLを取得して読み込みます
+    load(URL(sys.argv[1]))
