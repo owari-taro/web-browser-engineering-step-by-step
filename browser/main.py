@@ -2,6 +2,7 @@ import socket
 import ssl
 import tkinter
 import tkinter.font
+from typing import Literal
 
 
 WIDTH, HEIGHT = 800, 600
@@ -124,38 +125,51 @@ def lex(body):
     return out
 
 
-# テキストのレイアウトを行い、ディスプレイリスト(display_list)を返す関数
-def layout(tokens):
-    display_list = []
-    cursor_x, cursor_y = HSTEP, VSTEP
-    font = tkinter.font.Font()  # デフォルトフォントを使用
-    weight = "normal"
-    style = "roman"
-    for tok in tokens:
-        if isinstance(tok, Text):  # トークンがTextオブジェクトの場合
-            for word in tok.text.split():  # テキストを単語に分割して処理
+class Layout:
+    def __init__(self, tokens):
+        self.display_list = []
+        self.cursor_x = HSTEP
+        self.cursor_y = VSTEP
+        self.weight: Literal["normal", "bold"] = "normal"
+        self.style: Literal["roman", "italic"] = "roman"
+        self.size = 12
+        for tok in tokens:
+            self.token(tok)  # 各トークンを処理
+
+    def token(self, tok):
+        if isinstance(tok, Text):
+            # Textトークンはwordメソッドで単語ごとに処理
+            for word in tok.text.split():
                 font = tkinter.font.Font(
-                    size=16,
-                    weight=weight,
-                    slant=style,
+                    size=self.size,
+                    weight=self.weight,
+                    slant=self.style,
                 )
                 w = font.measure(word)  # 単語の幅を測定
-                if cursor_x + w > WIDTH - HSTEP:  # 単語が右端を超える場合は改行
-                    cursor_y += font.metrics("linespace") * 1.25
-                    cursor_x = HSTEP  # x座標をリセット
+                if self.cursor_x + w > WIDTH - HSTEP:  # 単語が右端を超える場合は改行
+                    self.cursor_y += font.metrics("linespace") * 1.25
+                    self.cursor_x = HSTEP  # x座標をリセット
                 # ディスプレイリストdisplay listに単語とその座標を追加
-                display_list.append((cursor_x, cursor_y, word, font))
+                self.display_list.append((self.cursor_x, self.cursor_y, word, font))
                 # カーソルを単語の幅とスペース分だけ進める
-                cursor_x += w + font.measure(" ")
+                self.cursor_x += w + font.measure(" ")
         elif tok.tag == "i":
-            style = "italic"
+            self.style = "italic"
         elif tok.tag == "/i":
-            style = "roman"
+            self.style = "roman"
         elif tok.tag == "b":
-            weight = "bold"
+            self.weight = "bold"
         elif tok.tag == "/b":
-            weight = "normal"
-    return display_list
+            self.weight = "normal"
+        elif tok.tag == "small":
+            self.size -= 2
+        elif tok.tag == "/small":
+            self.size += 2
+        elif tok.tag == "big":
+            self.size += 4
+        elif tok.tag == "/big":
+            self.size -= 4
+        return self.display_list
 
 
 class Browser:
@@ -175,8 +189,8 @@ class Browser:
     # URLからWebページを読み込み、表示する関数
     def load(self, url):
         body = url.request()
-        text = lex(body)
-        self.display_list = layout(text)
+        tokens = lex(body)
+        self.display_list = Layout(tokens).display_list
         # ディスプレイリストdisplay listを描画
         self.draw()
 
