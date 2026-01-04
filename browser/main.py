@@ -133,26 +133,52 @@ class Layout:
         self.weight: Literal["normal", "bold"] = "normal"
         self.style: Literal["roman", "italic"] = "roman"
         self.size = 12
+        self.line = []
         for tok in tokens:
             self.token(tok)  # 各トークンを処理
+        self.flush()  # 最後に残った行をフラッシュ
+
+    def flush(self):
+        if not self.line:
+            return  # 行が空なら何もしない
+        # 行内の最大アセントを計算
+        max_ascent = max([font.metrics("ascent") for x, word, font in self.line])
+        # ベースラインのy座標を計算 (レディングを考慮)
+        baseline = self.cursor_y + 1.25 * max_ascent
+        # 各単語をベースラインに合わせて配置し、ディスプレイリストdisplay listに追加
+        for x, word, font in self.line:
+            y = baseline - font.metrics(
+                "ascent"
+            )  # ベースラインからアセント分だけ上に配置
+            self.display_list.append((x, y, word, font))
+        # 行内の最大ディセントを計算
+        metrics = [font.metrics() for x, word, font in self.line]
+        max_descent = max([metric["descent"] for metric in metrics])
+        # 次の行のy座標を更新 (レディングを考慮)
+        self.cursor_y = baseline + 1.25 * max_descent
+        # xカーソルをリセットし、行バッファをクリア
+        self.cursor_x = HSTEP
+        self.line = []
+
+    def word(self, word):
+        font = tkinter.font.Font(
+            size=self.size,
+            weight=self.weight,
+            slant=self.style,
+        )
+        w = font.measure(word)  # 単語の幅を測定
+        # 単語が右端を超える場合は行をフラッシュ
+        if self.cursor_x + w > WIDTH - HSTEP:
+            self.flush()
+        self.line.append((self.cursor_x, word, font))
+        # カーソルを単語の幅とスペース分だけ進める
+        self.cursor_x += w + font.measure(" ")
 
     def token(self, tok):
         if isinstance(tok, Text):
             # Textトークンはwordメソッドで単語ごとに処理
             for word in tok.text.split():
-                font = tkinter.font.Font(
-                    size=self.size,
-                    weight=self.weight,
-                    slant=self.style,
-                )
-                w = font.measure(word)  # 単語の幅を測定
-                if self.cursor_x + w > WIDTH - HSTEP:  # 単語が右端を超える場合は改行
-                    self.cursor_y += font.metrics("linespace") * 1.25
-                    self.cursor_x = HSTEP  # x座標をリセット
-                # ディスプレイリストdisplay listに単語とその座標を追加
-                self.display_list.append((self.cursor_x, self.cursor_y, word, font))
-                # カーソルを単語の幅とスペース分だけ進める
-                self.cursor_x += w + font.measure(" ")
+                self.word(word)
         elif tok.tag == "i":
             self.style = "italic"
         elif tok.tag == "/i":
@@ -169,6 +195,11 @@ class Layout:
             self.size += 4
         elif tok.tag == "/big":
             self.size -= 4
+        elif tok.tag == "br":
+            self.flush()  # <br>タグで行をフラッシュ
+        elif tok.tag == "/p":
+            self.flush()  # </p>タグで行をフラッシュ
+            self.cursor_y += VSTEP  # 段落間のスペースを追加
         return self.display_list
 
 
