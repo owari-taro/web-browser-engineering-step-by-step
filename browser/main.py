@@ -88,35 +88,73 @@ class URL:
         return content
 
 
+class Text:
+    def __init__(self, text):
+        self.text = text
+
+
+class Tag:
+    def __init__(self, tag):
+        self.tag = tag
+
+
+# HTML本文をトークンリストに変換する関数
 def lex(body):
-    # HTML本文からテキストを抽出する関数
-    text = ""
+    out = []
+    buffer = ""  # テキストまたはタグの内容を一時的に保持
     in_tag = False  # タグ内にいるかどうかのフラグ
     for c in body:
         if c == "<":
             in_tag = True
+            # バッファにテキストがあればTextオブジェクトとして追加
+            if buffer:
+                out.append(Text(buffer))
+            buffer = ""  # バッファをクリア
         elif c == ">":
             in_tag = False
-        elif not in_tag:
-            # タグ外の文字をテキストに追加
-            text += c
-    return text
+            # バッファの内容をTagオブジェクトとして追加
+            out.append(Tag(buffer))
+            buffer = ""  # バッファをクリア
+        else:
+            # 文字をバッファに追加
+            buffer += c
+    # ループ終了後、タグ外でバッファにテキストが残っていれば追加
+    if not in_tag and buffer:
+        out.append(Text(buffer))
+    return out
 
 
 # テキストのレイアウトを行い、ディスプレイリスト(display_list)を返す関数
-def layout(text):
+def layout(tokens):
     display_list = []
     cursor_x, cursor_y = HSTEP, VSTEP
     font = tkinter.font.Font()  # デフォルトフォントを使用
-    for word in text.split():  # テキストを単語に分割してループ
-        w = font.measure(word)  # 単語の幅を測定
-        if cursor_x + w > WIDTH - HSTEP:  # 単語が右端を超える場合は改行
-            cursor_y += font.metrics("linespace") * 1.25
-            cursor_x = HSTEP  # x座標をリセット
-        # ディスプレイリストdisplay listに単語とその座標を追加
-        display_list.append((cursor_x, cursor_y, word))
-        # カーソルを単語の幅とスペース分だけ進める
-        cursor_x += w + font.measure(" ")
+    weight = "normal"
+    style = "roman"
+    for tok in tokens:
+        if isinstance(tok, Text):  # トークンがTextオブジェクトの場合
+            for word in tok.text.split():  # テキストを単語に分割して処理
+                font = tkinter.font.Font(
+                    size=16,
+                    weight=weight,
+                    slant=style,
+                )
+                w = font.measure(word)  # 単語の幅を測定
+                if cursor_x + w > WIDTH - HSTEP:  # 単語が右端を超える場合は改行
+                    cursor_y += font.metrics("linespace") * 1.25
+                    cursor_x = HSTEP  # x座標をリセット
+                # ディスプレイリストdisplay listに単語とその座標を追加
+                display_list.append((cursor_x, cursor_y, word, font))
+                # カーソルを単語の幅とスペース分だけ進める
+                cursor_x += w + font.measure(" ")
+        elif tok.tag == "i":
+            style = "italic"
+        elif tok.tag == "/i":
+            style = "roman"
+        elif tok.tag == "b":
+            weight = "bold"
+        elif tok.tag == "/b":
+            weight = "normal"
     return display_list
 
 
@@ -146,7 +184,7 @@ class Browser:
     def draw(self):
         # 描画前にキャンバスをクリア
         self.canvas.delete("all")
-        for x, y, c in self.display_list:
+        for x, y, word, font in self.display_list:
             # 画面下部より下の文字はスキップ
             if y > self.scroll + HEIGHT:
                 continue
@@ -154,7 +192,9 @@ class Browser:
             if y + VSTEP < self.scroll:
                 continue
             # スクロール位置を考慮して文字を描画
-            self.canvas.create_text(x, y - self.scroll, text=c)
+            self.canvas.create_text(
+                x, y - self.scroll, text=word, font=font, anchor="nw"
+            )
 
 
 if __name__ == "__main__":
