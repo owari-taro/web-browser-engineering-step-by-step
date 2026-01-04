@@ -1,6 +1,7 @@
 import socket
 import ssl
 import tkinter
+import tkinter.font
 
 
 WIDTH, HEIGHT = 800, 600
@@ -106,13 +107,16 @@ def lex(body):
 def layout(text):
     display_list = []
     cursor_x, cursor_y = HSTEP, VSTEP
-    for c in text:
-        # 文字とその座標をdisplay listに追加
-        display_list.append((cursor_x, cursor_y, c))
-        cursor_x += HSTEP
-        if cursor_x >= WIDTH - HSTEP:
-            cursor_y += VSTEP
-            cursor_x = HSTEP
+    font = tkinter.font.Font()  # デフォルトフォントを使用
+    for word in text.split():  # テキストを単語に分割してループ
+        w = font.measure(word)  # 単語の幅を測定
+        if cursor_x + w > WIDTH - HSTEP:  # 単語が右端を超える場合は改行
+            cursor_y += font.metrics("linespace") * 1.25
+            cursor_x = HSTEP  # x座標をリセット
+        # ディスプレイリストdisplay listに単語とその座標を追加
+        display_list.append((cursor_x, cursor_y, word))
+        # カーソルを単語の幅とスペース分だけ進める
+        cursor_x += w + font.measure(" ")
     return display_list
 
 
