@@ -104,39 +104,42 @@ class URL:
 
 
 class Text:
-    def __init__(self, text):
+    def __init__(self, text, parent):
         self.text = text
+        self.children = []
+        self.parent = parent
 
 
-class Tag:
-    def __init__(self, tag):
+class Element:
+    def __init__(self, tag, parent):
         self.tag = tag
+        self.children = []
+        self.parent = parent
 
 
-# HTML本文をトークンリストに変換する関数
-def lex(body):
-    out = []
-    buffer = ""  # テキストまたはタグの内容を一時的に保持
-    in_tag = False  # タグ内にいるかどうかのフラグ
-    for c in body:
-        if c == "<":
-            in_tag = True
-            # バッファにテキストがあればTextオブジェクトとして追加
-            if buffer:
-                out.append(Text(buffer))
-            buffer = ""  # バッファをクリア
-        elif c == ">":
-            in_tag = False
-            # バッファの内容をTagオブジェクトとして追加
-            out.append(Tag(buffer))
-            buffer = ""  # バッファをクリア
-        else:
-            # 文字をバッファに追加
-            buffer += c
-    # ループ終了後、タグ外でバッファにテキストが残っていれば追加
-    if not in_tag and buffer:
-        out.append(Text(buffer))
-    return out
+class HTMLParser:
+    def __init__(self, body):
+        self.body = body
+        self.unfinished = []
+
+    def parse(self):
+        text = ""
+        in_tag = False
+        for c in self.body:
+            if c == "<":
+                in_tag = True
+                if text:
+                    self.add_text(text)
+                text = ""
+            elif c == ">":
+                in_tag = False
+                self.add_tag(text)
+                text = ""
+            else:
+                text += c
+        if not in_tag and text:
+            self.add_text(text)
+        return self.finish()
 
 
 class Layout:
