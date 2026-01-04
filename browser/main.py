@@ -231,8 +231,7 @@ class Layout:
         self.style: Literal["roman", "italic"] = "roman"
         self.size = 12
         self.line = []
-        for tok in tokens:
-            self.token(tok)  # 各トークンを処理
+        self.recurse(tokens)
         self.flush()  # 最後に残った行をフラッシュ
 
     def flush(self):
@@ -267,32 +266,41 @@ class Layout:
         # カーソルを単語の幅とスペース分だけ進める
         self.cursor_x += w + font.measure(" ")
 
-    def token(self, tok):
-        if isinstance(tok, Text):
-            # Textトークンはwordメソッドで単語ごとに処理
-            for word in tok.text.split():
-                self.word(word)
-        elif tok.tag == "i":
+    def open_tag(self, tag):
+        if tag == "i":
             self.style = "italic"
-        elif tok.tag == "/i":
-            self.style = "roman"
-        elif tok.tag == "b":
+        elif tag == "b":
             self.weight = "bold"
-        elif tok.tag == "/b":
-            self.weight = "normal"
-        elif tok.tag == "small":
+        elif tag == "small":
             self.size -= 2
-        elif tok.tag == "/small":
-            self.size += 2
-        elif tok.tag == "big":
+        elif tag == "big":
             self.size += 4
-        elif tok.tag == "/big":
-            self.size -= 4
-        elif tok.tag == "br":
+        elif tag == "br":
             self.flush()  # <br>タグで行をフラッシュ
-        elif tok.tag == "/p":
+
+    def close_tag(self, tag):
+        if tag == "i":
+            self.style = "roman"
+        elif tag == "b":
+            self.weight = "normal"
+        elif tag == "small":
+            self.size += 2
+        elif tag == "big":
+            self.size -= 4
+        elif tag == "p":
             self.flush()  # </p>タグで行をフラッシュ
             self.cursor_y += VSTEP  # 段落間のスペースを追加
+
+    def recurse(self, tree):
+        if isinstance(tree, Text):
+            # Textトークンはwordメソッドで単語ごとに処理
+            for word in tree.text.split():
+                self.word(word)
+        else:
+            self.open_tag(tree.tag)
+            for child in tree.children:
+                self.recurse(child)
+            self.close_tag(tree.tag)
         return self.display_list
 
 
@@ -313,9 +321,8 @@ class Browser:
     # URLからWebページを読み込み、表示する関数
     def load(self, url):
         body = url.request()
-        tokens = lex(body)
-        self.display_list = Layout(tokens).display_list
-        # ディスプレイリストdisplay listを描画
+        self.nodes = HTMLParser(body).parse()
+        self.display_list = Layout(self.nodes).display_list
         self.draw()
 
     # ディスプレイリスト display listに基づいてキャンバスに描画するメソッド
@@ -339,8 +346,5 @@ if __name__ == "__main__":
     import sys
 
     # コマンドライン引数からURLを取得して読み込みます
-    # Browser().load(URL(sys.argv[1]))
-    # tkinter.mainloop()
-    body = URL(sys.argv[1]).request()
-    nodes = HTMLParser(body).parse()
-    print_tree(nodes)
+    Browser().load(URL(sys.argv[1]))
+    tkinter.mainloop()
