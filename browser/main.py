@@ -109,12 +109,24 @@ class Text:
         self.children = []
         self.parent = parent
 
+    def __repr__(self):
+        return repr(self.text)
+
 
 class Element:
     def __init__(self, tag, parent):
         self.tag = tag
         self.children = []
         self.parent = parent
+
+    def __repr__(self):
+        return "<" + self.tag + ">"
+
+
+def print_tree(node, indent=0):
+    print(" " * indent, node)
+    for child in node.children:
+        print_tree(child, indent + 2)
 
 
 class HTMLParser:
@@ -123,11 +135,15 @@ class HTMLParser:
         self.unfinished = []
 
     def add_text(self, text):
+        if text.isspace():
+            return
         parent = self.unfinished[-1]
         node = Text(text, parent)
         parent.children.append(node)
 
     def add_tag(self, tag):
+        if tag.startswith("!"):
+            return
         # 終了タグの場合
         if tag.startswith("/"):
             if len(self.unfinished) == 1:
@@ -285,5 +301,8 @@ if __name__ == "__main__":
     import sys
 
     # コマンドライン引数からURLを取得して読み込みます
-    Browser().load(URL(sys.argv[1]))
-    tkinter.mainloop()
+    # Browser().load(URL(sys.argv[1]))
+    # tkinter.mainloop()
+    body = URL(sys.argv[1]).request()
+    nodes = HTMLParser(body).parse()
+    print_tree(nodes)
