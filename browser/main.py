@@ -143,6 +143,12 @@ class Browser:
         # 描画前にキャンバスをクリア
         self.canvas.delete("all")
         for x, y, c in self.display_list:
+            # 画面下部より下の文字はスキップ
+            if y > self.scroll + HEIGHT:
+                continue
+            # 画面上部より上の文字はスキップ
+            if y + VSTEP < self.scroll:
+                continue
             # スクロール位置を考慮して文字を描画
             self.canvas.create_text(x, y - self.scroll, text=c)
 
