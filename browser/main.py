@@ -1,4 +1,5 @@
 import socket
+import ssl
 
 
 class URL:
@@ -6,12 +7,22 @@ class URL:
     def __init__(self, url):
         # スキームと残りのURLを分割します
         self.scheme, url = url.split("://", 1)
-        # スキームが 'http' であることを確認します
-        assert self.scheme == "http"
+        # スキームが 'http' または 'https' であることを確認します
+        assert self.scheme in ["http", "https"]
+        if self.scheme == "http":
+            self.port = 80
+        elif self.scheme == "https":
+            self.port = 443
         if "/" not in url:
             url = url + "/"
         # ホストと残りのURL（パス）を分割します
         self.host, url = url.split("/", 1)
+        # ホスト名にポートが含まれているか確認します
+        if ":" in self.host:
+            # ホスト名とポート番号を分割します
+            self.host, port = self.host.split(":", 1)
+            # ポート番号を整数に変換します
+            self.port = int(port)
         # パスを '/' から始まるように設定します
         self.path = "/" + url
 
@@ -22,7 +33,13 @@ class URL:
             type=socket.SOCK_STREAM,  # ストリームソケットタイプ (TCP)
             proto=socket.IPPROTO_TCP,  # TCPプロトコル
         )
-        s.connect((self.host, 80))
+        # 指定されたホストとポートに接続します
+        s.connect((self.host, self.port))
+
+        # HTTPSスキームの場合、SSL/TLSでソケットをラップします
+        if self.scheme == "https":
+            ctx = ssl.create_default_context()
+            s = ctx.wrap_socket(s, server_hostname=self.host)
 
         # GETリクエスト文字列を作成します
         request = "GET {} HTTP/1.0\r\n".format(self.path)
