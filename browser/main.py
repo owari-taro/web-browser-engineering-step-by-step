@@ -122,6 +122,32 @@ class HTMLParser:
         self.body = body
         self.unfinished = []
 
+    def add_text(self, text):
+        parent = self.unfinished[-1]
+        node = Text(text, parent)
+        parent.children.append(node)
+
+    def add_tag(self, tag):
+        # 終了タグの場合
+        if tag.startswith("/"):
+            if len(self.unfinished) == 1:
+                return
+            node = self.unfinished.pop()
+            parent = self.unfinished[-1]
+            parent.children.append(node)
+        # 開始タグの場合
+        else:
+            parent = self.unfinished[-1] if self.unfinished else None
+            node = Element(tag, parent)
+            self.unfinished.append(node)
+
+    def finish(self):
+        while len(self.unfinished) > 1:
+            node = self.unfinished.pop()
+            parent = self.unfinished[-1]
+            parent.children.append(node)
+        return self.unfinished.pop()
+
     def parse(self):
         text = ""
         in_tag = False
