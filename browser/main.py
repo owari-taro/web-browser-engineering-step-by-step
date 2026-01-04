@@ -4,6 +4,7 @@ import tkinter
 
 
 WIDTH, HEIGHT = 800, 600
+HSTEP, VSTEP = 13, 18  # 水平・垂直ステップ
 
 
 class URL:
@@ -85,19 +86,19 @@ class URL:
         return content
 
 
-# HTML本文を表示する関数
-def show(body):
-    in_tag = False
+def lex(body):
+    # HTML本文からテキストを抽出する関数
+    text = ""
+    in_tag = False  # タグ内にいるかどうかのフラグ
     for c in body:
         if c == "<":
-            # タグの開始
             in_tag = True
         elif c == ">":
-            # タグの終了
             in_tag = False
         elif not in_tag:
-            # タグの外の文字を出力
-            print(c, end="")
+            # タグ外の文字をテキストに追加
+            text += c
+    return text
 
 
 class Browser:
@@ -109,14 +110,15 @@ class Browser:
     # URLからWebページを読み込み、表示する関数
     def load(self, url):
         body = url.request()
-        show(body)
-
-        # 長方形を描画 (左上: 10, 20, 右下: 400, 300)
-        self.canvas.create_rectangle(10, 20, 400, 300)
-        # 円を描画 (左上: 100, 100, 右下: 150, 150)
-        self.canvas.create_oval(100, 100, 150, 150)
-        # テキストを描画 (位置: 200, 150)
-        self.canvas.create_text(200, 150, text="Hi!")
+        text = lex(body)
+        cursor_x, cursor_y = HSTEP, VSTEP  # カーソル位置を初期化
+        for c in text:
+            self.canvas.create_text(cursor_x, cursor_y, text=c)
+            cursor_x += HSTEP
+            # カーソルが右端を超えたら改行
+            if cursor_x >= WIDTH - HSTEP:
+                cursor_y += VSTEP
+                cursor_x = HSTEP
 
 
 if __name__ == "__main__":
