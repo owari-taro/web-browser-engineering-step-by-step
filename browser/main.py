@@ -1,5 +1,9 @@
 import socket
 import ssl
+import tkinter
+
+
+WIDTH, HEIGHT = 800, 600
 
 
 class URL:
@@ -96,14 +100,28 @@ def show(body):
             print(c, end="")
 
 
-# URLからWebページを読み込み、表示する関数
-def load(url):
-    body = url.request()
-    show(body)
+class Browser:
+    def __init__(self):
+        self.window = tkinter.Tk()
+        self.canvas = tkinter.Canvas(self.window, width=WIDTH, height=HEIGHT)
+        self.canvas.pack()
+
+    # URLからWebページを読み込み、表示する関数
+    def load(self, url):
+        body = url.request()
+        show(body)
+
+        # 長方形を描画 (左上: 10, 20, 右下: 400, 300)
+        self.canvas.create_rectangle(10, 20, 400, 300)
+        # 円を描画 (左上: 100, 100, 右下: 150, 150)
+        self.canvas.create_oval(100, 100, 150, 150)
+        # テキストを描画 (位置: 200, 150)
+        self.canvas.create_text(200, 150, text="Hi!")
 
 
 if __name__ == "__main__":
     import sys
 
     # コマンドライン引数からURLを取得して読み込みます
-    load(URL(sys.argv[1]))
+    Browser().load(URL(sys.argv[1]))
+    tkinter.mainloop()
