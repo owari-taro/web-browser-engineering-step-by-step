@@ -8,6 +8,20 @@ from typing import Literal
 WIDTH, HEIGHT = 800, 600
 HSTEP, VSTEP = 13, 18  # 水平・垂直ステップ
 SCROLL_STEP = 100
+FONTS = {}
+
+
+def get_font(size, weight, style):
+    # フォントキャッシュからフォントを取得または作成する関数
+    key = (size, weight, style)
+    if key not in FONTS:
+        # キャッシュにない場合は新しいフォントを作成
+        font = tkinter.font.Font(size=size, weight=weight, slant=style)
+        # パフォーマンス向上のためのLabelオブジェクト（Tkinterの推奨）
+        label = tkinter.Label(font=font)
+        FONTS[key] = (font, label)
+    # キャッシュからフォントオブジェクトを返す
+    return FONTS[key][0]
 
 
 class URL:
@@ -161,11 +175,7 @@ class Layout:
         self.line = []
 
     def word(self, word):
-        font = tkinter.font.Font(
-            size=self.size,
-            weight=self.weight,
-            slant=self.style,
-        )
+        font = get_font(self.size, self.weight, self.style)
         w = font.measure(word)  # 単語の幅を測定
         # 単語が右端を超える場合は行をフラッシュ
         if self.cursor_x + w > WIDTH - HSTEP:
