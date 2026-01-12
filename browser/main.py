@@ -395,6 +395,17 @@ class CSSParser:
         return None
 
 
+def style(node):
+    node.style = {}
+    if isinstance(node, Element) and "style" in node.attributes:
+        pairs = CSSParser(node.attributes["style"]).body()
+        for property, value in pairs.items():
+            node.style[property] = value
+
+    for child in node.children:
+        style(child)
+
+
 class DocumentLayout:
     def __init__(self, node):
         self.node = node
@@ -549,6 +560,11 @@ class BlockLayout:
             x2, y2 = self.x + self.width, self.y + self.height
             rect = DrawRect(self.x, self.y, x2, y2, "gray")
             cmds.append(rect)
+        bgcolor = self.node.style.get("background-color", "transparent")
+        if bgcolor != "transparent":
+            x2, y2 = self.x + self.width, self.y + self.height
+            rect = DrawRect(self.x, self.y, x2, y2, bgcolor)
+            cmds.append(rect)
         return cmds
 
 
@@ -571,6 +587,7 @@ class Browser:
     def load(self, url):
         body = url.request()
         self.nodes = HTMLParser(body).parse()
+        style(self.nodes)
         self.document = DocumentLayout(self.nodes)
         self.document.layout()
         self.display_list = []
