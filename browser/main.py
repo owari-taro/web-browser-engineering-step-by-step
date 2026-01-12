@@ -332,6 +332,69 @@ class HTMLParser:
         return self.finish()
 
 
+class CSSParser:
+    def __init__(self, s):
+        self.s = s
+        self.i = 0
+
+    def whitespace(self):
+        # 空白の場合はiをインクリメントする
+        while self.i < len(self.s) and self.s[self.i].isspace():
+            self.i += 1
+
+    def word(self):
+        start = self.i
+        while self.i < len(self.s):
+            # プロパティ名として許容されてている文字である場合はiを進める
+            if self.s[self.i].isalnum() or self.s[self.i] in "#-.%":
+                self.i += 1
+            # そうでなければループを抜ける
+            else:
+                break
+        if not (self.i > start):
+            raise Exception("Parsing error")
+        return self.s[start : self.i]
+
+    def literal(self, literal):
+        if not (self.i < len(self.s) and self.s[self.i] == literal):
+            raise Exception("Parsing error")
+        self.i += 1
+
+    def pair(self):
+        prop = self.word()  # プロパティ
+        self.whitespace()  # 空白
+        self.literal(":")  # コロン
+        self.whitespace()  # 空白
+        val = self.word()  # 値
+        return prop.casefold(), val
+
+    def body(self):
+        pairs = {}
+        while self.i < len(self.s):
+            try:
+                prop, val = self.pair()  # プロパティと値のペア
+                pairs[prop.casefold()] = val
+                self.whitespace()  # 空白
+                self.literal(";")  # 区切りのセミコロン
+                self.whitespace()  # 空白
+            except Exception:
+                why = self.ignore_until([";"])
+                if why == ";":
+                    self.literal(";")
+                    self.whitespace()
+                else:
+                    break
+        return pairs
+
+    def ignore_until(self, chars):
+        while self.i < len(self.s):
+            if self.s[self.i] in chars:
+                return self.s[self.i]
+            else:
+                self.i += 1
+        return None
+
+
 class DocumentLayout:
     def __init__(self, node):
         self.node = node
