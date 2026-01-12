@@ -50,6 +50,39 @@ BLOCK_ELEMENTS = [
 ]
 
 
+class DrawText:
+    def __init__(self, x1, y1, text, font):
+        self.top = y1
+        self.left = x1
+        self.text = text
+        self.font = font
+        self.bottom = y1 + font.metrics("linespace")
+
+    def execute(self, scroll, canvas):
+        canvas.create_text(
+            self.left, self.top - scroll, text=self.text, font=self.font, anchor="nw"
+        )
+
+
+class DrawRect:
+    def __init__(self, x1, y1, x2, y2, color):
+        self.top = y1
+        self.left = x1
+        self.bottom = y2
+        self.right = x2
+        self.color = color
+
+    def execute(self, scroll, canvas):
+        canvas.create_rectangle(
+            self.left,
+            self.top - scroll,
+            self.right,
+            self.bottom - scroll,
+            width=0,  # デフォルトでは1ピクセルの線が引かれるため0にする,
+            fill=self.color,
+        )
+
+
 def get_font(size, weight, style):
     # フォントキャッシュからフォントを取得または作成する関数
     key = (size, weight, style)
@@ -445,7 +478,15 @@ class BlockLayout:
         return self.display_list
 
     def paint(self):
-        return self.display_list
+        cmds = []
+        if self.layout_mode() == "inline":
+            for x, y, word, font in self.display_list:
+                cmds.append(DrawText(x, y, word, font))
+        if isinstance(self.node, Element) and self.node.tag == "pre":
+            x2, y2 = self.x + self.width, self.y + self.height
+            rect = DrawRect(self.x, self.y, x2, y2, "gray")
+            cmds.append(rect)
+        return cmds
 
 
 class Browser:
@@ -459,8 +500,9 @@ class Browser:
         self.window.bind("<Down>", self.scrolldown)
 
     def scrolldown(self, e):
-        self.scroll += SCROLL_STEP
-        self.draw()  # 再描画
+        max_y = max(self.document.height + 2 * VSTEP - HEIGHT, 0)
+        self.scroll = min(self.scroll + SCROLL_STEP, max_y)
+        self.draw()
 
     # URLからWebページを読み込み、表示する関数
     def load(self, url):
@@ -472,21 +514,16 @@ class Browser:
         paint_tree(self.document, self.display_list)
         self.draw()
 
-    # ディスプレイリスト display listに基づいてキャンバスに描画するメソッド
     def draw(self):
-        # 描画前にキャンバスをクリア
         self.canvas.delete("all")
-        for x, y, word, font in self.display_list:
-            # 画面下部より下の文字はスキップ
-            if y > self.scroll + HEIGHT:
+        for cmd in self.display_list:
+            # スクロール量がcmdのtopに達してなければスキップ
+            if cmd.top > self.scroll + HEIGHT:
                 continue
-            # 画面上部より上の文字はスキップ
-            if y + VSTEP < self.scroll:
+            # スクロール量がcmdのbottomよりも大きければ見えないのでスキップ
+            if cmd.bottom < self.scroll:
                 continue
-            # スクロール位置を考慮して文字を描画
-            self.canvas.create_text(
-                x, y - self.scroll, text=word, font=font, anchor="nw"
-            )
+            cmd.execute(self.scroll, self.canvas)
 
 
 if __name__ == "__main__":
