@@ -724,6 +724,27 @@ class Browser:
         self.scroll = 0
         # 下矢印キーにscrolldownメソッドをバインド
         self.window.bind("<Down>", self.scrolldown)
+        self.window.bind("<Button-1>", self.click)
+        self.url = None
+
+    def click(self, e):
+        x, y = e.x, e.y
+        y += self.scroll
+        objs = [
+            obj
+            for obj in tree_to_list(self.document, [])
+            if obj.x <= x < obj.x + obj.width and obj.y <= y < obj.y + obj.height
+        ]
+        if not objs:
+            return
+        elt = objs[-1].node
+        while elt:
+            if isinstance(elt, Text):
+                pass
+            elif elt.tag == "a" and "href" in elt.attributes:
+                url = self.url.resolve(elt.attributes["href"])
+                return self.load(url)
+            elt = elt.parent
 
     def scrolldown(self, e):
         max_y = max(self.document.height + 2 * VSTEP - HEIGHT, 0)
@@ -732,6 +753,7 @@ class Browser:
 
     # URLからWebページを読み込み、表示する関数
     def load(self, url):
+        self.url = url
         body = url.request()
         self.nodes = HTMLParser(body).parse()
         rules = DEFAULT_STYLE_SHEET.copy()
