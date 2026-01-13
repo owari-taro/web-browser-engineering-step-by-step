@@ -589,21 +589,13 @@ class BlockLayout:
                 self.children.append(next)
                 previous = next
         else:
-            self.cursor_x = 0
-            self.cursor_y = 0
-            self.line = []
+            self.new_line()
             self.recurse(self.node)
-            self.flush()
         for child in self.children:
             child.layout()
-        if mode == "block":
-            self.height = sum([child.height for child in self.children])
-        else:
-            self.height = self.cursor_y
+        self.height = sum([child.height for child in self.children])
 
     def flush(self):
-        if not self.line:
-            return  # 行が空なら何もしない
         # 行内の最大アセントを計算
         max_ascent = max([font.metrics("ascent") for x, word, font, color in self.line])
         # ベースラインのy座標を計算 (レディングを考慮)
@@ -622,7 +614,6 @@ class BlockLayout:
         self.line = []
 
     def word(self, node, word):
-        color = node.style["color"]
         weight = node.style["font-weight"]
         style = node.style["font-style"]
         if style == "normal":
@@ -631,18 +622,24 @@ class BlockLayout:
         font = get_font(size, weight, style)
         w = font.measure(word)  # 単語の幅を測定
         if self.cursor_x + w > self.width:
-            self.flush()
-        self.line.append((self.cursor_x, word, font, color))
-        # カーソルを単語の幅とスペース分だけ進める
+            self.new_line()
+        line = self.children[-1]
+        previous_word = line.children[-1] if line.children else None
+        text = TextLayout(node, word, line, previous_word)
+        line.children.append(text)
         self.cursor_x += w + font.measure(" ")
+
+    def new_line(self):
+        self.cursor_x = 0
+        last_line = self.children[-1] if self.children else None
+        new_line = LineLayout(self.node, self, last_line)
+        self.children.append(new_line)
 
     def recurse(self, node):
         if isinstance(node, Text):
             for word in node.text.split():
                 self.word(node, word)
         else:
-            if node.tag == "br":
-                self.flush()
             for child in node.children:
                 self.recurse(child)
         return self.display_list
@@ -662,6 +659,23 @@ class BlockLayout:
             rect = DrawRect(self.x, self.y, x2, y2, bgcolor)
             cmds.append(rect)
         return cmds
+
+
+class LineLayout:
+    def __init__(self, node, parent, previous):
+        self.node = node
+        self.parent = parent
+        self.previous = previous
+        self.children = []
+
+
+class TextLayout:
+    def __init__(self, node, word, parent, previous):
+        self.node = node
+        self.word = word
+        self.children = []
+        self.parent = parent
+        self.previous = previous
 
 
 DEFAULT_STYLE_SHEET = CSSParser(open("browser.css").read()).parse()
