@@ -112,6 +112,8 @@ class JSContext:
     def XMLHttpRequest_send(self, method, url, body):
         full_url = self.tab.url.resolve(url)
         headers, out = full_url.request(body)
+        if full_url.origin() != self.tab.url.origin():
+            raise Exception("Cross-origin XHR request not allowed")
         return out
 
     def run(self, script, code):
@@ -201,6 +203,9 @@ class URL:
         if self.scheme == "http" and self.port == 80:
             port_part = ""
         return self.scheme + "://" + self.host + port_part + self.path
+
+    def origin(self):
+        return self.scheme + "://" + self.host + ":" + str(self.port)
 
     def request(self, payload=None):
         # TCP/IPソケットを作成します
