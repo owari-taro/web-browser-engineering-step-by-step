@@ -109,6 +109,11 @@ class JSContext:
             child.parent = elt
         self.tab.render()
 
+    def XMLHttpRequest_send(self, method, url, body):
+        full_url = self.tab.url.resolve(url)
+        headers, out = full_url.request(body)
+        return out
+
     def run(self, script, code):
         try:
             return self.interp.evaljs(code)
