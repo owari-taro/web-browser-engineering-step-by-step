@@ -61,10 +61,30 @@ RUNTIME_JS = open("runtime.js").read()
 
 
 class JSContext:
-    def __init__(self):
+    def __init__(self, tab):
+        self.tab = tab
         self.interp = dukpy.JSInterpreter()
         self.interp.evaljs(RUNTIME_JS)
         self.interp.export_function("log", print)
+        self.interp.export_function("querySelectorAll", self.querySelectorAll)
+        self.node_to_handle = {}
+        self.handle_to_node = {}
+
+    def get_handle(self, elt):
+        if elt not in self.node_to_handle:
+            handle = len(self.node_to_handle)
+            self.node_to_handle[elt] = handle
+            self.handle_to_node[handle] = elt
+        else:
+            handle = self.node_to_handle[elt]
+        return handle
+
+    def querySelectorAll(self, selector_text):
+        selector = CSSParser(selector_text).selector()
+        nodes = [
+            node for node in tree_to_list(self.tab.nodes, []) if selector.matches(node)
+        ]
+        return [self.get_handle(node) for node in nodes]
 
     def run(self, script, code):
         try:
@@ -1208,7 +1228,7 @@ class Tab:
             and node.tag == "script"
             and "src" in node.attributes
         ]
-        self.js = JSContext()
+        self.js = JSContext(self)
         for script in scripts:
             script_url = url.resolve(script)
             try:
@@ -1216,7 +1236,7 @@ class Tab:
                 self.js.run(script, body)
             except:
                 continue
-            print("Script returned: ", dukpy.evaljs(body))
+            print("Script returned: ", self.js.run(script, body))
         self.rules = DEFAULT_STYLE_SHEET.copy()
         links = [
             node.attributes["href"]
