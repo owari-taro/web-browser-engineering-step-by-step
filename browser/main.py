@@ -3,6 +3,7 @@ import ssl
 import tkinter
 import tkinter.font
 from typing import Literal
+import urllib
 
 
 WIDTH, HEIGHT = 800, 600
@@ -137,7 +138,7 @@ class URL:
             port_part = ""
         return self.scheme + "://" + self.host + port_part + self.path
 
-    def request(self):
+    def request(self, payload=None):
         # TCP/IPソケットを作成します
         s = socket.socket(
             family=socket.AF_INET,  # IPv4アドレスファミリー
@@ -152,12 +153,18 @@ class URL:
             ctx = ssl.create_default_context()
             s = ctx.wrap_socket(s, server_hostname=self.host)
 
-        # GETリクエスト文字列を作成します
-        request = "GET {} HTTP/1.0\r\n".format(self.path)
+        method = "POST" if payload else "GET"
+
+        request = "{} {} HTTP/1.0\r\n".format(method, self.path)
         # Hostヘッダーを追加します
         request += "Host: {}\r\n".format(self.host)
+        if payload:
+            length = len(payload.encode("utf8"))
+            request += "Content-Length: {}\r\n".format(length)
         # ヘッダーの終わりを示す空行を追加します
         request += "\r\n"
+        if payload:
+            request += payload
         # リクエストをUTF-8でエンコードして送信します
         s.send(request.encode("utf8"))
         response = s.makefile("r", encoding="utf8", newline="\r\n")
@@ -1117,6 +1124,25 @@ class Tab:
             self.focus.attributes["value"] += char
             self.render()
 
+    def submit_form(self, elt):
+        inputs = [
+            node
+            for node in tree_to_list(elt, [])
+            if isinstance(node, Element)
+            and node.tag == "input"
+            and "name" in node.attributes
+        ]
+        body = ""
+        for input in inputs:
+            name = input.attributes["name"]
+            value = input.attributes.get("value", "")
+            name = urllib.parse.quote(name)
+            value = urllib.parse.quote(value)
+            body += "&" + name + "=" + value
+        body = body[1:]
+        url = self.url.resolve(elt.attributes["action"])
+        self.load(url, body)
+
     def click(self, x, y):
         self.focus = None
         y += self.scroll
@@ -1141,6 +1167,11 @@ class Tab:
                 self.focus = elt
                 elt.is_focused = True
                 return self.render()
+            elif elt.tag == "button":
+                while elt:
+                    if elt.tag == "form" and "action" in elt.attributes:
+                        return self.submit_form(elt)
+                    elt = elt.parent
             elt = elt.parent
 
     def scrolldown(self):
@@ -1148,11 +1179,11 @@ class Tab:
         self.scroll = min(self.scroll + SCROLL_STEP, max_y)
 
     # URLからWebページを読み込み、表示する関数
-    def load(self, url):
+    def load(self, url, payload=None):
         self.scroll = 0
         self.history.append(url)
         self.url = url
-        body = url.request()
+        body = url.request(payload)
         self.nodes = HTMLParser(body).parse()
         self.rules = DEFAULT_STYLE_SHEET.copy()
         links = [
