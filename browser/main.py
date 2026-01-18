@@ -66,8 +66,11 @@ class JSContext:
         self.interp.evaljs(RUNTIME_JS)
         self.interp.export_function("log", print)
 
-    def run(self, code):
-        return self.interp.evaljs(code)
+    def run(self, script, code):
+        try:
+            return self.interp.evaljs(code)
+        except dukpy.JSRuntimeError as e:
+            print("Script", script, "crashed", e)
 
 
 class DrawText:
@@ -1210,7 +1213,7 @@ class Tab:
             script_url = url.resolve(script)
             try:
                 body = script_url.request()
-                self.js.run(body)
+                self.js.run(script, body)
             except:
                 continue
             print("Script returned: ", dukpy.evaljs(body))
