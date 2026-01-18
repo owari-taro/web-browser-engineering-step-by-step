@@ -57,6 +57,18 @@ INHERITED_PROPERTIES = {
     "color": "black",
 }
 
+RUNTIME_JS = open("runtime.js").read()
+
+
+class JSContext:
+    def __init__(self):
+        self.interp = dukpy.JSInterpreter()
+        self.interp.evaljs(RUNTIME_JS)
+        self.interp.export_function("log", print)
+
+    def run(self, code):
+        return self.interp.evaljs(code)
+
 
 class DrawText:
     def __init__(self, x1, y1, text, font, color):
@@ -1193,10 +1205,12 @@ class Tab:
             and node.tag == "script"
             and "src" in node.attributes
         ]
+        self.js = JSContext()
         for script in scripts:
             script_url = url.resolve(script)
             try:
                 body = script_url.request()
+                self.js.run(body)
             except:
                 continue
             print("Script returned: ", dukpy.evaljs(body))
