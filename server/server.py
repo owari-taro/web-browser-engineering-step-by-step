@@ -3,19 +3,28 @@ import urllib.parse
 import random
 
 
-ENTRIES = ["Pavel was here"]
 SESSIONS = {}
+LOGINS = {"crashoverride": "0cool", "cerealkiller": "emmanuel", "": ""}
+ENTRIES = [
+    ("No names. We are nameless!", "cerealkiller"),
+    ("HACK THE PLANET!!!", "crashoverride"),
+]
 
 
 def do_request(session, method, url, headers, body):
     if method == "GET" and url == "/":
         return "200 OK", show_comments(session)
+    elif method == "POST" and url == "/":
+        params = form_decode(body)
+        return do_login(session, params)
     elif method == "GET" and url == "/comment.js":
         with open("comment.js") as f:
             return "200 OK", f.read()
     elif method == "GET" and url == "/comment.css":
         with open("comment.css") as f:
             return "200 OK", f.read()
+    elif method == "GET" and url == "/login":
+        return "200 OK", login_form(session)
     elif method == "POST" and url == "/add":
         params = form_decode(body)
         add_entry(session, params)
@@ -24,18 +33,45 @@ def do_request(session, method, url, headers, body):
         return "404 Not Found", not_found(url, method)
 
 
+def do_login(session, params):
+    username = params.get("username")
+    password = params.get("password")
+    if username in LOGINS and LOGINS[username] == password:
+        session["user"] = username
+        return "200 OK", show_comments(session)
+    else:
+        out = "<!doctype html>"
+        out += "<h1>Invalid password for {}</h1>".format(username)
+        return "401 Unauthorized", out
+
+
 def show_comments(session):
     out = "<!doctype html>"
     out += "<link rel=stylesheet href=/comment.css>"
-    out += "<script src=/comment.js></script>"
-    for entry in ENTRIES:
-        out += "<p>" + entry + "</p>"
-    out += "<form action=add method=post>"
-    out += "<p><input name=guest></p>"
-    out += "<p><button>Sign the book!</button></p>"
-    out += "<strong></strong>"
-    out += "</form>"
+    for entry, who in ENTRIES:
+        out += "<p>" + entry + "\n"
+        out += "<i>by " + who + "</i></p>"
+
+    if "user" in session:
+        out += "<script src=/comment.js></script>"
+        out += "<h1>Hello, " + session["user"] + "</h1>"
+        out += "<form action=add method=post>"
+        out += "<p><input name=guest></p>"
+        out += "<p><button>Sign the book!</button></p>"
+        out += "</form>"
+    else:
+        out += "<a href=/login>Sign in to write in the guest book</a>"
     return out
+
+
+def login_form(session):
+    body = "<!doctype html>"
+    body += "<form action=/ method=post>"
+    body += "<p>Username: <input name=username></p>"
+    body += "<p>Password: <input name=password type=password></p>"
+    body += "<p><button>Log in</button></p>"
+    body += "</form>"
+    return body
 
 
 def form_decode(body):
@@ -55,8 +91,10 @@ def not_found(url, method):
 
 
 def add_entry(session, params):
+    if "user" not in session:
+        return
     if "guest" in params and len(params["guest"]) <= 100:
-        ENTRIES.append(params["guest"])
+        ENTRIES.append((params["guest"], session["user"]))
     return show_comments(session)
 
 
