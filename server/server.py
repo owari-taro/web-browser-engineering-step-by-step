@@ -1,28 +1,30 @@
 import socket
 import urllib.parse
+import random
 
 
 ENTRIES = ["Pavel was here"]
+SESSIONS = {}
 
 
-def do_request(method, url, headers, body):
+def do_request(session, method, url, headers, body):
     if method == "GET" and url == "/":
-        return "200 OK", show_comments()
+        return "200 OK", show_comments(session)
     elif method == "GET" and url == "/comment.js":
         with open("comment.js") as f:
             return "200 OK", f.read()
     elif method == "GET" and url == "/comment.css":
         with open("comment.css") as f:
             return "200 OK", f.read()
-
     elif method == "POST" and url == "/add":
         params = form_decode(body)
-        return "200 OK", add_entry(params)
+        add_entry(session, params)
+        return "200 OK", show_comments(session)
     else:
         return "404 Not Found", not_found(url, method)
 
 
-def show_comments():
+def show_comments(session):
     out = "<!doctype html>"
     out += "<link rel=stylesheet href=/comment.css>"
     out += "<script src=/comment.js></script>"
@@ -52,10 +54,10 @@ def not_found(url, method):
     return out
 
 
-def add_entry(params):
+def add_entry(session, params):
     if "guest" in params and len(params["guest"]) <= 100:
         ENTRIES.append(params["guest"])
-    return show_comments()
+    return show_comments(session)
 
 
 def handle_connection(conx):
@@ -75,9 +77,17 @@ def handle_connection(conx):
         body = req.read(length).decode("utf8")
     else:
         body = None
-    status, body = do_request(method, url, headers, body)
+    if "cookie" in headers:
+        token = headers["cookie"][len("token=") :]
+    else:
+        token = str(random.random())[2:]
+    session = SESSIONS.setdefault(token, {})
+    status, body = do_request(session, method, url, headers, body)
     response = "HTTP/1.0 {}\r\n".format(status)
     response += "Content-Length: {}\r\n".format(len(body.encode("utf8")))
+    if "cookie" not in headers:
+        template = "Set-Cookie: token={}\r\n"
+        response += template.format(token)
     response += "\r\n" + body
     conx.send(response.encode("utf8"))
     conx.close()
