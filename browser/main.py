@@ -56,6 +56,7 @@ INHERITED_PROPERTIES = {
     "font-weight": "normal",
     "color": "black",
 }
+COOKIE_JAR = {}
 
 RUNTIME_JS = open("runtime.js").read()
 EVENT_DISPATCH_JS = "new Node(dukpy.handle).dispatchEvent(new Event(dukpy.type))"
@@ -219,6 +220,10 @@ class URL:
         if payload:
             length = len(payload.encode("utf8"))
             request += "Content-Length: {}\r\n".format(length)
+
+        if self.host in COOKIE_JAR:
+            cookie = COOKIE_JAR[self.host]
+            request += "Cookie: {}\r\n".format(cookie)
         # ヘッダーの終わりを示す空行を追加します
         request += "\r\n"
         if payload:
@@ -249,6 +254,9 @@ class URL:
         # Content-Encodingヘッダーがないことを確認します
         assert "content-encoding" not in response_headers
 
+        if "set-cookie" in response_headers:
+            cookie = response_headers["set-cookie"]
+            COOKIE_JAR[self.host] = cookie
         content = response.read()
         # ソケットを閉じます
         s.close()
