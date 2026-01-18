@@ -111,6 +111,8 @@ class JSContext:
 
     def XMLHttpRequest_send(self, method, url, body):
         full_url = self.tab.url.resolve(url)
+        if not self.tab.allowed_request(full_url):
+            raise Exception("Cross-origin XHR blocked by CSP")
         headers, out = full_url.request(self.tab.url, body)
         if full_url.origin() != self.tab.url.origin():
             raise Exception("Cross-origin XHR request not allowed")
@@ -1278,6 +1280,9 @@ class Tab:
         max_y = max(self.document.height + 2 * VSTEP - self.tab_height, 0)
         self.scroll = min(self.scroll + SCROLL_STEP, max_y)
 
+    def allowed_request(self, url):
+        return self.allowed_origins == None or url.origin() in self.allowed_origins
+
     # URLからWebページを読み込み、表示する関数
     def load(self, url, payload=None):
         headers, body = url.request(self.url, payload)
@@ -1285,6 +1290,15 @@ class Tab:
         self.history.append(url)
         self.url = url
         self.nodes = HTMLParser(body).parse()
+
+        self.allowed_origins = None
+        if "content-security-policy" in headers:
+            csp = headers["content-security-policy"].split()
+            if len(csp) > 0 and csp[0] == "default-src":
+                self.allowed_origins = []
+                for origin in csp[1:]:
+                    self.allowed_origins.append(URL(origin).origin())
+
         scripts = [
             node.attributes["src"]
             for node in tree_to_list(self.nodes, [])
@@ -1295,6 +1309,9 @@ class Tab:
         self.js = JSContext(self)
         for script in scripts:
             script_url = url.resolve(script)
+            if not self.allowed_request(script_url):
+                print("Blocked script", script, "due to CSP")
+                continue
             try:
                 header, body = script_url.request(url)
                 self.js.run(script, body)

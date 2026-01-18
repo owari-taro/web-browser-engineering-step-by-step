@@ -49,6 +49,7 @@ def do_login(session, params):
 def show_comments(session):
     out = "<!doctype html>"
     out += "<link rel=stylesheet href=/comment.css>"
+    out += "<script src=https://example.com/evil.js></script>"
     for entry, who in ENTRIES:
         out += "<p>" + html.escape(entry) + "\n"
         out += "<i>by " + html.escape(who) + "</i></p>"
@@ -134,6 +135,8 @@ def handle_connection(conx):
     if "cookie" not in headers:
         template = "Set-Cookie: token={}; SameSite=Lax\r\n"
         response += template.format(token)
+    csp = "default-src http://localhost:8000 http://host.docker.internal:8000"
+    response += "Content-Security-Policy: {}\r\n".format(csp)
     response += "\r\n" + body
     conx.send(response.encode("utf8"))
     conx.close()
