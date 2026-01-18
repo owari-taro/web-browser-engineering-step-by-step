@@ -53,9 +53,12 @@ def show_comments(session):
         out += "<i>by " + who + "</i></p>"
 
     if "user" in session:
+        nonce = str(random.random())[2:]
+        session["nonce"] = nonce
         out += "<script src=/comment.js></script>"
         out += "<h1>Hello, " + session["user"] + "</h1>"
         out += "<form action=add method=post>"
+        out += "<input name=nonce type=hidden value=" + nonce + ">"
         out += "<p><input name=guest></p>"
         out += "<p><button>Sign the book!</button></p>"
         out += "</form>"
@@ -91,6 +94,10 @@ def not_found(url, method):
 
 
 def add_entry(session, params):
+    if "nonce" not in session or "nonce" not in params:
+        return
+    if session["nonce"] != params["nonce"]:
+        return
     if "user" not in session:
         return
     if "guest" in params and len(params["guest"]) <= 100:
