@@ -67,6 +67,7 @@ class JSContext:
         self.interp.evaljs(RUNTIME_JS)
         self.interp.export_function("log", print)
         self.interp.export_function("querySelectorAll", self.querySelectorAll)
+        self.interp.export_function("getAttribute", self.getAttribute)
         self.node_to_handle = {}
         self.handle_to_node = {}
 
@@ -85,6 +86,11 @@ class JSContext:
             node for node in tree_to_list(self.tab.nodes, []) if selector.matches(node)
         ]
         return [self.get_handle(node) for node in nodes]
+
+    def getAttribute(self, handle, attr):
+        elt = self.handle_to_node[handle]
+        attr = elt.attributes.get(attr, None)
+        return attr if attr else ""
 
     def run(self, script, code):
         try:
