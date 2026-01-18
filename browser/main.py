@@ -227,6 +227,7 @@ class Element:
         self.attributes = attributes
         self.children = []
         self.parent = parent
+        self.is_focused = False
 
     def __repr__(self):
         return "<" + self.tag + ">"
@@ -780,6 +781,9 @@ class InputLayout:
             else:
                 print("Ignoring HTML contents inside button")
                 text = ""
+        if self.node.is_focused:
+            cx = self.x + self.font.measure(text)
+            cmds.append(DrawLine(cx, self.y, cx, self.y + self.height, "black", 1))
         color = self.node.style["color"]
         cmds.append(DrawText(self.x, self.y, text, self.font, color))
         return cmds
@@ -922,6 +926,8 @@ class Chrome:
     def keypress(self, char):
         if self.focus == "address bar":
             self.address_bar += char
+            return True
+        return False
 
     def enter(self):
         if self.focus == "address bar":
@@ -937,6 +943,9 @@ class Chrome:
             tabs_start + tab_width * (i + 1),
             self.tabbar_bottom,
         )
+
+    def blur(self):
+        self.focus = None
 
     def paint(self):
         cmds = []
@@ -1045,19 +1054,31 @@ class Browser:
 
     def handle_click(self, e):
         if e.y < self.chrome.bottom:
+            self.focus = None
             self.chrome.click(e.x, e.y)
         else:
+            self.focus = "content"
+            self.chrome.blur()
             tab_y = e.y - self.chrome.bottom
             self.active_tab.click(e.x, tab_y)
         self.draw()
+
+    def keypress(self, char):
+        if self.focus == "address bar":
+            self.address_bar += char
+            return True
+        return False
 
     def handle_key(self, e):
         if len(e.char) == 0:
             return
         if not (0x20 <= ord(e.char) < 0x7F):
             return
-        self.chrome.keypress(e.char)
-        self.draw()
+        if self.chrome.keypress(e.char):
+            self.draw()
+        elif self.focus == "content":
+            self.active_tab.keypress(e.char)
+            self.draw()
 
     def handle_enter(self, e):
         self.chrome.enter()
@@ -1087,8 +1108,17 @@ class Tab:
         self.url = None
         self.tab_height = tab_height
         self.history = []
+        self.rules = []
+        self.nodes = None
+        self.focus = None
+
+    def keypress(self, char):
+        if self.focus:
+            self.focus.attributes["value"] += char
+            self.render()
 
     def click(self, x, y):
+        self.focus = None
         y += self.scroll
         objs = [
             obj
@@ -1104,6 +1134,13 @@ class Tab:
             elif elt.tag == "a" and "href" in elt.attributes:
                 url = self.url.resolve(elt.attributes["href"])
                 return self.load(url)
+            elif elt.tag == "input":
+                elt.attributes["value"] = ""
+                if self.focus:
+                    self.focus.is_focused = False
+                self.focus = elt
+                elt.is_focused = True
+                return self.render()
             elt = elt.parent
 
     def scrolldown(self):
@@ -1117,7 +1154,7 @@ class Tab:
         self.url = url
         body = url.request()
         self.nodes = HTMLParser(body).parse()
-        rules = DEFAULT_STYLE_SHEET.copy()
+        self.rules = DEFAULT_STYLE_SHEET.copy()
         links = [
             node.attributes["href"]
             for node in tree_to_list(self.nodes, [])
@@ -1132,8 +1169,12 @@ class Tab:
                 body = style_url.request()
             except:
                 continue
-            rules.extend(CSSParser(body).parse())
-        style(self.nodes, sorted(rules, key=cascade_priority))
+            self.rules.extend(CSSParser(body).parse())
+        style(self.nodes, sorted(self.rules, key=cascade_priority))
+        self.render()
+
+    def render(self):
+        style(self.nodes, sorted(self.rules, key=cascade_priority))
         self.document = DocumentLayout(self.nodes)
         self.document.layout()
         self.display_list = []
