@@ -1154,6 +1154,32 @@ def mainloop(browser):
                 browser.handle_key(event.text.text.decode("utf8"))
 
 
+NAMED_COLORS = {
+    "black": "#000000",
+    "gray": "#808080",
+    "white": "#ffffff",
+    "red": "#ff0000",
+    "green": "#00ff00",
+    "blue": "#0000ff",
+    "lightblue": "#add8e6",
+    "lightgreen": "#90ee90",
+    "orange": "#ffa500",
+    "orangered": "#ff4500",
+}
+
+
+def parse_color(color):
+    if color.startswith("#") and len(color) == 7:
+        r = int(color[1:3], 16)
+        g = int(color[3:5], 16)
+        b = int(color[5:7], 16)
+        return skia.Color(r, g, b)
+    elif color in NAMED_COLORS:
+        return parse_color(NAMED_COLORS[color])
+    else:
+        return skia.ColorBLACK
+
+
 class Browser:
     def __init__(self):
         self.tabs = []
@@ -1166,7 +1192,22 @@ class Browser:
             HEIGHT,
             sdl2.SDL_WINDOW_SHOWN,
         )
+        self.root_surface = skia.Surface.MakeRaster(
+            skia.ImageInfo.Make(
+                WIDTH, HEIGHT, ct=skia.kRGBA_8888_ColorType, at=skia.kUnpremul_AlphaType
+            )
+        )
         self.chrome = Chrome(self)
+        if sdl2.SDL_BYTEORDER == sdl2.SDL_BIG_ENDIAN:
+            self.RED_MASK = 0xFF000000
+            self.GREEN_MASK = 0x00FF0000
+            self.BLUE_MASK = 0x0000FF00
+            self.ALPHA_MASK = 0x000000FF
+        else:
+            self.RED_MASK = 0x000000FF
+            self.GREEN_MASK = 0x0000FF00
+            self.BLUE_MASK = 0x00FF0000
+            self.ALPHA_MASK = 0xFF000000
 
     def handle_quit(self):
         sdl2.SDL_DestroyWindow(self.sdl_window)
@@ -1212,6 +1253,26 @@ class Browser:
         self.active_tab.draw(self.canvas, self.chrome.bottom)
         for cmd in self.chrome.paint():
             cmd.execute(0, self.canvas)
+        skia_image = self.root_surface.makeImageSnapshot()
+        skia_bytes = skia_image.tobytes()
+        depth = 32  # ピクセルごとのビット数（4バイト） Bits per pixel
+        pitch = 4 * WIDTH  # 行ごとのバイト数Bytes per row
+        sdl_surface = sdl2.SDL_CreateRGBSurfaceFrom(
+            skia_bytes,
+            WIDTH,
+            HEIGHT,
+            depth,
+            pitch,
+            self.RED_MASK,
+            self.GREEN_MASK,
+            self.BLUE_MASK,
+            self.ALPHA_MASK,
+        )
+        rect = sdl2.SDL_Rect(0, 0, WIDTH, HEIGHT)
+        window_surface = sdl2.SDL_GetWindowSurface(self.sdl_window)
+        # 実際にコピーを行っているのはSDL_BlitSurfaceです
+        sdl2.SDL_BlitSurface(sdl_surface, rect, window_surface, rect)
+        sdl2.SDL_UpdateWindowSurface(self.sdl_window)
 
     def new_tab(self, url):
         new_tab = Tab(HEIGHT - self.chrome.bottom)
