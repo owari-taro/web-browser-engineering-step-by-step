@@ -1,8 +1,5 @@
 import socket
 import ssl
-import tkinter
-import tkinter.font
-from typing import Literal
 import urllib
 import dukpy
 import ctypes
@@ -132,20 +129,20 @@ class DrawText:
     def __init__(self, x1, y1, text, font, color):
         self.text = text
         self.font = font
-        self.rect = Rect(
-            x1, y1, x1 + font.measure(text), y1 + font.metrics("linespace")
-        )
+        self.top = y1
+        self.left = x1
+        self.right = x1 + font.measureText(text)
+        self.bottom = y1 + linespace(font)
+        self.rect = skia.Rect.MakeLTRB(x1, y1, self.right, self.bottom)
         self.color = color
 
     def execute(self, scroll, canvas):
-        canvas.create_text(
-            self.rect.left,
-            self.rect.top - scroll,
-            text=self.text,
-            font=self.font,
-            anchor="nw",
-            fill=self.color,
+        paint = skia.Paint(
+            AntiAlias=True,
+            Color=parse_color(self.color),
         )
+        baseline = self.top - scroll - self.font.getMetrics().fAscent
+        canvas.drawString(self.text, float(self.left), baseline, self.font, paint)
 
 
 class DrawRect:
@@ -154,27 +151,43 @@ class DrawRect:
         self.rect = rect
 
     def execute(self, scroll, canvas):
-        canvas.create_rectangle(
-            self.rect.left,
-            self.rect.top - scroll,
-            self.rect.right,
-            self.rect.bottom - scroll,
-            width=0,  # デフォルトでは1ピクセルの線が引かれるため0にする,
-            fill=self.color,
+        paint = skia.Paint(
+            Color=parse_color(self.color),
         )
+        canvas.drawRect(self.rect.makeOffset(0, -scroll), paint)
+
+
+class DrawRRect:
+    def __init__(self, rect, radius, color):
+        self.rect = rect
+        self.rrect = skia.RRect.MakeRectXY(rect, radius, radius)
+        self.color = color
+
+    def execute(self, scroll, canvas):
+        sk_color = parse_color(self.color)
+        canvas.drawRRect(self.rrect, paint=skia.Paint(Color=sk_color))
+
+
+def getMetric(font, what):
+    return font.getMetrics()[what]
 
 
 def get_font(size, weight, style):
-    # フォントキャッシュからフォントを取得または作成する関数
-    key = (size, weight, style)
+    key = (weight, style)
     if key not in FONTS:
-        # キャッシュにない場合は新しいフォントを作成
-        font = tkinter.font.Font(size=size, weight=weight, slant=style)
-        # パフォーマンス向上のためのLabelオブジェクト（Tkinterの推奨）
-        label = tkinter.Label(font=font)
-        FONTS[key] = (font, label)
-    # キャッシュからフォントオブジェクトを返す
-    return FONTS[key][0]
+        if weight == "bold":
+            skia_weight = skia.FontStyle.kBold_Weight
+        else:
+            skia_weight = skia.FontStyle.kNormal_Weight
+        if style == "italic":
+            skia_style = skia.FontStyle.kItalic_Slant
+        else:
+            skia_style = skia.FontStyle.kUpright_Slant
+        skia_width = skia.FontStyle.kNormal_Width
+        style_info = skia.FontStyle(skia_weight, skia_width, skia_style)
+        font = skia.Typeface("Arial", style_info)
+        FONTS[key] = font
+    return skia.Font(FONTS[key], size)
 
 
 class URL:
@@ -670,7 +683,9 @@ class BlockLayout:
         self.cursor_y = 0
 
     def self_rect(self):
-        return Rect(self.x, self.y, self.x + self.width, self.y + self.height)
+        return skia.Rect.MakeLTRB(
+            self.x, self.y, self.x + self.width, self.y + self.height
+        )
 
     def layout_mode(self):
         if isinstance(self.node, Text):
@@ -712,16 +727,18 @@ class BlockLayout:
 
     def flush(self):
         # 行内の最大アセントを計算
-        max_ascent = max([font.metrics("ascent") for x, word, font, color in self.line])
+        max_ascent = max(
+            [-font.getMetrics().fAscent for x, word, font, color in self.line]
+        )
         # ベースラインのy座標を計算 (レディングを考慮)
         baseline = self.cursor_y + 1.25 * max_ascent
         for rel_x, word, font, color in self.line:
             x = self.x + rel_x
-            y = self.y + baseline - font.metrics("ascent")
+            y = self.y + baseline + font.getMetrics().fAscent
             self.display_list.append((x, y, word, font, color))
         # 行内の最大ディセントを計算
-        metrics = [font.metrics() for x, word, font, color in self.line]
-        max_descent = max([metric["descent"] for metric in metrics])
+        metrics = [font.getMetrics() for x, word, font, color in self.line]
+        max_descent = max([-metric.fDescent for metric in metrics])
         # 次の行のy座標を更新 (レディングを考慮)
         self.cursor_y = baseline + 1.25 * max_descent
         # xカーソルをリセットし、行バッファをクリア
@@ -735,14 +752,14 @@ class BlockLayout:
             style = "roman"
         size = int(float(node.style["font-size"][:-2]) * 0.75)
         font = get_font(size, weight, style)
-        w = font.measure(word)  # 単語の幅を測定
+        w = font.measureText(word)  # 単語の幅を測定
         if self.cursor_x + w > self.width:
             self.new_line()
         line = self.children[-1]
         previous_word = line.children[-1] if line.children else None
         text = TextLayout(node, word, line, previous_word)
         line.children.append(text)
-        self.cursor_x += w + font.measure(" ")
+        self.cursor_x += w + font.measureText(" ")
 
     def new_line(self):
         self.cursor_x = 0
@@ -766,7 +783,7 @@ class BlockLayout:
         size = int(float(node.style["font-size"][:-2]) * 0.75)
         font = get_font(size, weight, style)
 
-        self.cursor_x += w + font.measure(" ")
+        self.cursor_x += w + font.measureText(" ")
 
     def recurse(self, node):
         if isinstance(node, Text):
@@ -790,12 +807,12 @@ class BlockLayout:
         cmds = []
         if isinstance(self.node, Element) and self.node.tag == "pre":
             x2, y2 = self.x + self.width, self.y + self.height
-            rect = DrawRect(Rect(self.x, self.y, x2, y2), "gray")
+            rect = DrawRect(skia.Rect.MakeLTRB(self.x, self.y, x2, y2), "gray")
             cmds.append(rect)
         bgcolor = self.node.style.get("background-color", "transparent")
         if bgcolor != "transparent":
-            rect = DrawRect(self.self_rect(), bgcolor)
-            cmds.append(rect)
+            radius = float(self.node.style.get("border-radius", "0px")[:-2])
+            cmds.append(DrawRRect(self.self_rect(), radius, bgcolor))
         return cmds
 
 
@@ -820,11 +837,11 @@ class LineLayout:
             self.height = 0
             return
 
-        max_ascent = max([word.font.metrics("ascent") for word in self.children])
+        max_ascent = max([-word.font.getMetrics().fAscent for word in self.children])
         baseline = self.y + 1.25 * max_ascent
         for word in self.children:
-            word.y = baseline - word.font.metrics("ascent")
-        max_descent = max([word.font.metrics("descent") for word in self.children])
+            word.y = baseline + word.font.getMetrics().fAscent
+        max_descent = max([word.font.getMetrics().fDescent for word in self.children])
         self.height = 1.25 * (max_ascent + max_descent)
 
     def should_paint(self):
@@ -832,6 +849,11 @@ class LineLayout:
 
     def paint(self):
         return []
+
+
+def linespace(font):
+    metrics = font.getMetrics()
+    return metrics.fDescent - metrics.fAscent
 
 
 INPUT_WIDTH_PX = 200
@@ -849,7 +871,9 @@ class InputLayout:
         self.height = None
 
     def self_rect(self):
-        return Rect(self.x, self.y, self.x + self.width, self.y + self.height)
+        return skia.Rect.MakeLTRB(
+            self.x, self.y, self.x + self.width, self.y + self.height
+        )
 
     def layout(self):
         weight = self.node.style["font-weight"]
@@ -860,11 +884,11 @@ class InputLayout:
         self.font = get_font(size, weight, style)
         self.width = INPUT_WIDTH_PX
         if self.previous:
-            space = self.previous.font.measure(" ")
+            space = self.previous.font.measureText(" ")
             self.x = self.previous.x + space + self.previous.width
         else:
             self.x = self.parent.x
-        self.height = self.font.metrics("linespace")
+        self.height = linespace(self.font)
 
     def should_paint(self):
         return True
@@ -884,7 +908,7 @@ class InputLayout:
                 print("Ignoring HTML contents inside button")
                 text = ""
         if self.node.is_focused:
-            cx = self.x + self.font.measure(text)
+            cx = self.x + self.font.measureText(text)
             cmds.append(DrawLine(cx, self.y, cx, self.y + self.height, "black", 1))
         color = self.node.style["color"]
         cmds.append(DrawText(self.x, self.y, text, self.font, color))
@@ -906,13 +930,13 @@ class TextLayout:
             style = "roman"
         size = int(float(self.node.style["font-size"][:-2]) * 0.75)
         self.font = get_font(size, weight, style)
-        self.width = self.font.measure(self.word)
+        self.width = self.font.measureText(self.word)
         if self.previous:
-            space = self.previous.font.measure(" ")
+            space = self.previous.font.measureText(" ")
             self.x = self.previous.x + space + self.previous.width
         else:
             self.x = self.parent.x
-        self.height = self.font.metrics("linespace")
+        self.height = linespace(self.font)
 
     def should_paint(self):
         return True
@@ -932,59 +956,48 @@ class DrawOutline:
         self.thickness = thickness
 
     def execute(self, scroll, canvas):
-        canvas.create_rectangle(
-            self.rect.left,
-            self.rect.top - scroll,
-            self.rect.right,
-            self.rect.bottom - scroll,
-            width=self.thickness,
-            outline=self.color,
+        paint = skia.Paint(
+            Color=parse_color(self.color),
+            StrokeWidth=self.thickness,
+            Style=skia.Paint.kStroke_Style,
         )
-
-
-class Rect:
-    def __init__(self, left, top, right, bottom):
-        self.left = left
-        self.top = top
-        self.right = right
-        self.bottom = bottom
-
-    def containsPoint(self, x, y):
-        return x >= self.left and x < self.right and y >= self.top and y < self.bottom
-
-    def __str__(self):
-        return "Rect({}, {}, {}, {})".format(
-            self.left, self.top, self.right, self.bottom
-        )
+        canvas.drawRect(self.rect.makeOffset(0, -scroll), paint)
 
 
 class DrawLine:
     def __init__(self, x1, y1, x2, y2, color, thickness):
-        self.rect = Rect(x1, y1, x2, y2)
+        self.x1 = x1
+        self.y1 = y1
+        self.x2 = x2
+        self.y2 = y2
+        self.rect = skia.Rect.MakeLTRB(x1, y1, x2, y2)
         self.color = color
         self.thickness = thickness
 
     def execute(self, scroll, canvas):
-        canvas.create_line(
-            self.rect.left,
-            self.rect.top - scroll,
-            self.rect.right,
-            self.rect.bottom - scroll,
-            fill=self.color,
-            width=self.thickness,
+        path = (
+            skia.Path()
+            .moveTo(self.x1, self.y1 - scroll)
+            .lineTo(self.x2, self.y2 - scroll)
         )
+        paint = skia.Paint(
+            Color=parse_color(self.color),
+            StrokeWidth=self.thickness,
+            Style=skia.Paint.kStroke_Style,
+        )
+        canvas.drawPath(path, paint)
 
 
 class Chrome:
     def __init__(self, browser):
         self.browser = browser
         self.font = get_font(20, "normal", "roman")
-        self.font_height = self.font.metrics("linespace")
+        self.font_height = linespace(self.font)
         self.padding = 5
         self.tabbar_top = 0
         self.tabbar_bottom = self.font_height + 2 * self.padding
-        plus_width = self.font.measure("+") + 2 * self.padding
-        self.newtab_rect = Rect(
+        plus_width = self.font.measureText("+") + 2 * self.padding
+        self.newtab_rect = skia.Rect.MakeLTRB(
             self.padding,
             self.padding,
             self.padding + plus_width,
@@ -994,15 +1007,15 @@ class Chrome:
         self.urlbar_top = self.tabbar_bottom
         self.urlbar_bottom = self.urlbar_top + self.font_height + 2 * self.padding
         self.bottom = self.urlbar_bottom
-        back_width = self.font.measure("<") + 2 * self.padding
-        self.back_rect = Rect(
+        back_width = self.font.measureText("<") + 2 * self.padding
+        self.back_rect = skia.Rect.MakeLTRB(
             self.padding,
             self.urlbar_top + self.padding,
             self.padding + back_width,
             self.urlbar_bottom - self.padding,
         )
-        self.address_rect = Rect(
-            self.back_rect.top + self.padding,
+        self.address_rect = skia.Rect.MakeLTRB(
+            self.back_rect.top() + self.padding,
             self.urlbar_top + self.padding,
             WIDTH - self.padding,
             self.urlbar_bottom - self.padding,
@@ -1012,16 +1025,16 @@ class Chrome:
 
     def click(self, x, y):
         self.focus = None
-        if self.newtab_rect.containsPoint(x, y):
+        if self.newtab_rect.contains(x, y):
             self.browser.new_tab(URL("https://browser.engineering/"))
-        elif self.back_rect.containsPoint(x, y):
+        elif self.back_rect.contains(x, y):
             self.browser.active_tab.go_back()
-        elif self.address_rect.containsPoint(x, y):
+        elif self.address_rect.contains(x, y):
             self.focus = "address bar"
             self.address_bar = ""
         else:
             for i, tab in enumerate(self.browser.tabs):
-                if self.tab_rect(i).containsPoint(x, y):
+                if self.tab_rect(i).contains(x, y):
                     self.browser.active_tab = tab
                     break
 
@@ -1037,9 +1050,9 @@ class Chrome:
             self.focus = None
 
     def tab_rect(self, i):
-        tabs_start = self.newtab_rect.right + self.padding
-        tab_width = self.font.measure("Tab X") + 2 * self.padding
-        return Rect(
+        tabs_start = self.newtab_rect.right() + self.padding
+        tab_width = self.font.measureText("Tab X") + 2 * self.padding
+        return skia.Rect.MakeLTRB(
             tabs_start + tab_width * i,
             self.tabbar_top,
             tabs_start + tab_width * (i + 1),
@@ -1051,13 +1064,13 @@ class Chrome:
 
     def paint(self):
         cmds = []
-        cmds.append(DrawRect(Rect(0, 0, WIDTH, self.bottom), "white"))
+        cmds.append(DrawRect(skia.Rect.MakeLTRB(0, 0, WIDTH, self.bottom), "white"))
         cmds.append(DrawLine(0, self.bottom, WIDTH, self.bottom, "black", 1))
         cmds.append(DrawOutline(self.newtab_rect, "black", 1))
         cmds.append(
             DrawText(
-                self.newtab_rect.left + self.padding,
-                self.newtab_rect.top,
+                self.newtab_rect.left() + self.padding,
+                self.newtab_rect.top(),
                 "+",
                 self.font,
                 "black",
@@ -1066,8 +1079,8 @@ class Chrome:
         cmds.append(DrawOutline(self.back_rect, "black", 1))
         cmds.append(
             DrawText(
-                self.back_rect.left + self.padding,
-                self.back_rect.top,
+                self.back_rect.left() + self.padding,
+                self.back_rect.top(),
                 "<",
                 self.font,
                 "black",
@@ -1077,15 +1090,15 @@ class Chrome:
         for i, tab in enumerate(self.browser.tabs):
             bounds = self.tab_rect(i)
             cmds.append(
-                DrawLine(bounds.left, 0, bounds.left, bounds.bottom, "black", 1)
+                DrawLine(bounds.left(), 0, bounds.left(), bounds.bottom(), "black", 1)
             )
             cmds.append(
-                DrawLine(bounds.right, 0, bounds.right, bounds.bottom, "black", 1)
+                DrawLine(bounds.right(), 0, bounds.right(), bounds.bottom(), "black", 1)
             )
             cmds.append(
                 DrawText(
-                    bounds.left + self.padding,
-                    bounds.top + self.padding,
+                    bounds.left() + self.padding,
+                    bounds.top() + self.padding,
                     "Tab {}".format(i),
                     self.font,
                     "black",
@@ -1093,30 +1106,37 @@ class Chrome:
             )
             if tab == self.browser.active_tab:
                 cmds.append(
-                    DrawLine(0, bounds.bottom, bounds.left, bounds.bottom, "black", 1)
+                    DrawLine(
+                        0, bounds.bottom(), bounds.left(), bounds.bottom(), "black", 1
+                    )
                 )
                 cmds.append(
                     DrawLine(
-                        bounds.right, bounds.bottom, WIDTH, bounds.bottom, "black", 1
+                        bounds.right(),
+                        bounds.bottom(),
+                        WIDTH,
+                        bounds.bottom(),
+                        "black",
+                        1,
                     )
                 )
         if self.focus == "address bar":
             cmds.append(
                 DrawText(
-                    self.address_rect.left + self.padding,
-                    self.address_rect.top,
+                    self.address_rect.left() + self.padding,
+                    self.address_rect.top(),
                     self.address_bar,
                     self.font,
                     "black",
                 )
             )
-            w = self.font.measure(self.address_bar)
+            w = self.font.measureText(self.address_bar)
             cmds.append(
                 DrawLine(
-                    self.address_rect.left + self.padding + w,
-                    self.address_rect.top,
-                    self.address_rect.left + self.padding + w,
-                    self.address_rect.bottom,
+                    self.address_rect.left() + self.padding + w,
+                    self.address_rect.top(),
+                    self.address_rect.left() + self.padding + w,
+                    self.address_rect.bottom(),
                     "red",
                     1,
                 )
@@ -1125,8 +1145,8 @@ class Chrome:
             url = str(self.browser.active_tab.url)
             cmds.append(
                 DrawText(
-                    self.address_rect.left + self.padding,
-                    self.address_rect.top,
+                    self.address_rect.left() + self.padding,
+                    self.address_rect.top(),
                     url,
                     self.font,
                     "black",
@@ -1208,6 +1228,7 @@ class Browser:
             self.GREEN_MASK = 0x0000FF00
             self.BLUE_MASK = 0x00FF0000
             self.ALPHA_MASK = 0xFF000000
+        sdl2.SDL_StartTextInput()
 
     def handle_quit(self):
         sdl2.SDL_DestroyWindow(self.sdl_window)
@@ -1233,15 +1254,15 @@ class Browser:
             return True
         return False
 
-    def handle_key(self, e):
-        if len(e.char) == 0:
+    def handle_key(self, char):
+        if len(char) == 0:
             return
-        if not (0x20 <= ord(e.char) < 0x7F):
+        if not (0x20 <= ord(char) < 0x7F):
             return
-        if self.chrome.keypress(e.char):
+        if self.chrome.keypress(char):
             self.draw()
         elif self.focus == "content":
-            self.active_tab.keypress(e.char)
+            self.active_tab.keypress(char)
             self.draw()
 
     def handle_enter(self):
@@ -1249,10 +1270,11 @@ class Browser:
         self.draw()
 
     def draw(self):
-        self.canvas.delete("all")
-        self.active_tab.draw(self.canvas, self.chrome.bottom)
+        canvas = self.root_surface.getCanvas()
+        canvas.clear(skia.ColorWHITE)
+        self.active_tab.draw(canvas, self.chrome.bottom)
         for cmd in self.chrome.paint():
-            cmd.execute(0, self.canvas)
+            cmd.execute(0, canvas)
         skia_image = self.root_surface.makeImageSnapshot()
         skia_bytes = skia_image.tobytes()
         depth = 32  # ピクセルごとのビット数（4バイト） Bits per pixel
@@ -1275,13 +1297,14 @@ class Browser:
         sdl2.SDL_UpdateWindowSurface(self.sdl_window)
 
     def new_tab(self, url):
+        canvas = self.root_surface.getCanvas()
         new_tab = Tab(HEIGHT - self.chrome.bottom)
         new_tab.load(url)
         self.active_tab = new_tab
         self.tabs.append(new_tab)
         self.draw()
         for cmd in self.chrome.paint():
-            cmd.execute(0, self.canvas)
+            cmd.execute(0, canvas)
 
 
 class Tab:
@@ -1431,9 +1454,9 @@ class Tab:
 
     def draw(self, canvas, offset):
         for cmd in self.display_list:
-            if cmd.rect.top > self.scroll + self.tab_height:
+            if cmd.rect.top() > self.scroll + self.tab_height:
                 continue
-            if cmd.rect.bottom < self.scroll:
+            if cmd.rect.bottom() < self.scroll:
                 continue
             cmd.execute(self.scroll - offset, canvas)
 
