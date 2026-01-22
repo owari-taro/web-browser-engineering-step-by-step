@@ -15,6 +15,8 @@ ENTRIES = [
 def do_request(session, method, url, headers, body):
     if method == "GET" and url == "/":
         return "200 OK", show_comments(session)
+    elif method == "GET" and url == "/trans":
+        return "200 OK", show_transparent_example()
     elif method == "POST" and url == "/":
         params = form_decode(body)
         return do_login(session, params)
@@ -67,6 +69,19 @@ def show_comments(session):
     else:
         out += "<a href=/login>Sign in to write in the guest book</a>"
     return out
+
+
+def show_transparent_example():
+    return """
+    <!doctype html>
+    <div style="background-color:orange">
+        Parent
+        <div style="background-color:blue;mix-blend-mode:difference">
+            Child
+        </div>
+        Parent
+    </div>
+    """
 
 
 def login_form(session):
