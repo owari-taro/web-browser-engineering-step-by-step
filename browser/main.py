@@ -6,6 +6,7 @@ import ctypes
 import sdl2
 import skia
 import math
+import threading
 
 
 WIDTH, HEIGHT = 800, 600
@@ -61,6 +62,7 @@ COOKIE_JAR = {}
 
 RUNTIME_JS = open("runtime.js").read()
 EVENT_DISPATCH_JS = "new Node(dukpy.handle).dispatchEvent(new Event(dukpy.type))"
+SETTIMEOUT_JS = "__runSetTimeout(dukpy.handle)"
 
 
 class JSContext:
@@ -74,6 +76,8 @@ class JSContext:
         self.interp.export_function("innerHTML_set", self.innerHTML_set)
         self.node_to_handle = {}
         self.handle_to_node = {}
+        self.interp.export_function("setTimeout", self.setTimeout)
+        self.discarded = False
 
     def get_handle(self, elt):
         if elt not in self.node_to_handle:
@@ -118,6 +122,18 @@ class JSContext:
         if full_url.origin() != self.tab.url.origin():
             raise Exception("Cross-origin XHR request not allowed")
         return out
+
+    def dispatch_settimeout(self, handle):
+        if self.discarded:
+            return
+        self.interp.evaljs(SETTIMEOUT_JS, handle=handle)
+
+    def setTimeout(self, handle, time):
+        def run_callback():
+            task = Task(self.dispatch_settimeout, handle)
+            self.tab.task_runner.schedule_task(task)
+
+        threading.Timer(time / 1000.0, run_callback).start()
 
     def run(self, script, code):
         try:
@@ -1315,14 +1331,27 @@ class TaskRunner:
     def __init__(self, tab):
         self.tab = tab
         self.tasks = []
+        self.condition = threading.Condition()
 
     def schedule_task(self, task):
+        self.condition.acquire(blocking=True)
         self.tasks.append(task)
+        self.condition.notify_all()
+        self.condition.release()
 
     def run(self):
+        task = None
+        self.condition.acquire(blocking=True)
         if len(self.tasks) > 0:
             task = self.tasks.pop(0)
+        self.condition.release()
+        if task:
             task.run()
+        self.condition.acquire(blocking=True)
+        if len(self.tasks) == 0:
+            pass
+            # self.condition.wait()
+        self.condition.release()
 
 
 class Browser:
@@ -1480,6 +1509,7 @@ class Tab:
         self.nodes = None
         self.focus = None
         self.task_runner = TaskRunner(self)
+        self.js = None
 
     def keypress(self, char):
         if self.focus:
@@ -1576,6 +1606,8 @@ class Tab:
             and node.tag == "script"
             and "src" in node.attributes
         ]
+        if self.js:
+            self.js.discarded = True
         self.js = JSContext(self)
         for script in scripts:
             script_url = url.resolve(script)
