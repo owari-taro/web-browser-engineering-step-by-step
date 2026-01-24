@@ -78,6 +78,7 @@ class JSContext:
         self.interp.export_function("getAttribute", self.getAttribute)
         self.interp.export_function("innerHTML_set", self.innerHTML_set)
         self.interp.export_function("XMLHttpRequest_send", self.XMLHttpRequest_send)
+        self.interp.export_function("requestAnimationFrame", self.requestAnimationFrame)
         self.node_to_handle = {}
         self.handle_to_node = {}
         self.interp.export_function("setTimeout", self.setTimeout)
@@ -152,6 +153,9 @@ class JSContext:
             self.tab.task_runner.schedule_task(task)
 
         threading.Timer(time / 1000.0, run_callback).start()
+
+    def requestAnimationFrame(self):
+        self.tab.browser.set_needs_animation_frame(self.tab)
 
     def run(self, script, code):
         try:
@@ -1378,6 +1382,7 @@ class TaskRunner:
 
 class Browser:
     def __init__(self):
+        self.animation_timer = None
         self.tabs = []
         self.active_tab = None
         self.sdl_window = sdl2.SDL_CreateWindow(
@@ -1408,6 +1413,7 @@ class Browser:
 
         self.chrome_surface = skia.Surface(WIDTH, math.ceil(self.chrome.bottom))
         self.tab_surface = None
+        self.needs_animation_frame = True
 
     def handle_quit(self):
         sdl2.SDL_DestroyWindow(self.sdl_window)
@@ -1456,11 +1462,15 @@ class Browser:
 
     def schedule_animation_frame(self):
         def callback():
+            self.needs_animation_frame = False
+            self.animation_timer = None
             active_tab = self.active_tab
             task = Task(active_tab.render)
             active_tab.task_runner.schedule_task(task)
 
-        threading.Timer(REFRESH_RATE_SEC, callback).start()
+        if self.needs_animation_frame and not self.animation_timer:
+            self.animation_timer = threading.Timer(REFRESH_RATE_SEC, callback)
+            self.animation_timer.start()
 
     def set_needs_raster_and_draw(self):
         self.needs_raster_and_draw = True
@@ -1538,6 +1548,10 @@ class Browser:
         for cmd in self.chrome.paint():
             cmd.execute(canvas)
 
+    def set_needs_animation_frame(self, tab):
+        if tab == self.active_tab:
+            self.needs_animation_frame = True
+
 
 class Tab:
     def __init__(self, browser, tab_height):
@@ -1557,6 +1571,7 @@ class Tab:
 
     def set_needs_render(self):
         self.needs_render = True
+        self.browser.set_needs_animation_frame(self)
 
     def keypress(self, char):
         if self.focus:
@@ -1688,6 +1703,7 @@ class Tab:
         self.set_needs_render()
 
     def render(self):
+        self.js.interp.evaljs("__runRAFHandlers()")
         if not self.needs_render:
             return
         style(self.nodes, sorted(self.rules, key=cascade_priority))

@@ -15,6 +15,11 @@ ENTRIES = [
 def do_request(session, method, url, headers, body):
     if method == "GET" and url == "/":
         return "200 OK", show_comments(session)
+    elif method == "GET" and url == "/count":
+        return "200 OK", show_count()
+    elif method == "GET" and url == "/eventloop.js":
+        with open("eventloop.js") as f:
+            return "200 OK", f.read()
     elif method == "GET" and url == "/trans":
         return "200 OK", show_transparent_example()
     elif method == "GET" and url == "/clip":
@@ -36,6 +41,16 @@ def do_request(session, method, url, headers, body):
         return "200 OK", show_comments(session)
     else:
         return "404 Not Found", not_found(url, method)
+
+
+def show_count():
+    out = "<!doctype html>"
+    out += "<div>"
+    out += " Let's count up to 99!"
+    out += "</div>"
+    out += "<div>Output</div>"
+    out += "<script src=/eventloop.js></script>"
+    return out
 
 
 def do_login(session, params):
