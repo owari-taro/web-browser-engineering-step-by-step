@@ -65,6 +65,8 @@ EVENT_DISPATCH_JS = "new Node(dukpy.handle).dispatchEvent(new Event(dukpy.type))
 SETTIMEOUT_JS = "__runSetTimeout(dukpy.handle)"
 XHR_ONLOAD_JS = "__runXHROnload(dukpy.out, dukpy.handle)"
 
+REFRESH_RATE_SEC = 0.033
+
 
 class JSContext:
     def __init__(self, tab):
@@ -1285,6 +1287,8 @@ def mainloop(browser):
             elif event.type == sdl2.SDL_TEXTINPUT:
                 browser.handle_key(event.text.text.decode("utf8"))
         browser.active_tab.task_runner.run()
+        browser.raster_and_draw()
+        browser.schedule_animation_frame()
 
 
 NAMED_COLORS = {
@@ -1446,6 +1450,19 @@ class Browser:
 
     def handle_enter(self):
         self.chrome.enter()
+        self.draw()
+
+    def schedule_animation_frame(self):
+        def callback():
+            active_tab = self.active_tab
+            task = Task(active_tab.render)
+            active_tab.task_runner.schedule_task(task)
+
+        threading.Timer(REFRESH_RATE_SEC, callback).start()
+
+    def raster_and_draw(self):
+        self.raster_chrome()
+        self.raster_tab()
         self.draw()
 
     def raster_tab(self):
