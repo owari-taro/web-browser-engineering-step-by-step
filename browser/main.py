@@ -121,7 +121,7 @@ class JSContext:
 
     def run(self, script, code):
         try:
-            return self.interp.evaljs(code)
+            self.interp.evaljs(code)
         except dukpy.JSRuntimeError as e:
             print("Script", script, "crashed", e)
 
@@ -1252,6 +1252,7 @@ def mainloop(browser):
                     browser.handle_down()
             elif event.type == sdl2.SDL_TEXTINPUT:
                 browser.handle_key(event.text.text.decode("utf8"))
+        browser.active_tab.task_runner.run()
 
 
 NAMED_COLORS = {
@@ -1297,6 +1298,31 @@ def parse_blend_mode(blend_mode_str):
         return skia.BlendMode.kSrcOver
     else:
         return skia.BlendMode.kSrcOver
+
+
+class Task:
+    def __init__(self, task_code, *args):
+        self.task_code = task_code
+        self.args = args
+
+    def run(self):
+        self.task_code(*self.args)
+        self.task_code = None
+        self.args = None
+
+
+class TaskRunner:
+    def __init__(self, tab):
+        self.tab = tab
+        self.tasks = []
+
+    def schedule_task(self, task):
+        self.tasks.append(task)
+
+    def run(self):
+        if len(self.tasks) > 0:
+            task = self.tasks.pop(0)
+            task.run()
 
 
 class Browser:
@@ -1453,6 +1479,7 @@ class Tab:
         self.rules = []
         self.nodes = None
         self.focus = None
+        self.task_runner = TaskRunner(self)
 
     def keypress(self, char):
         if self.focus:
@@ -1557,10 +1584,10 @@ class Tab:
                 continue
             try:
                 header, body = script_url.request(url)
-                self.js.run(script, body)
             except:
                 continue
-            print("Script returned: ", self.js.run(script, body))
+            task = Task(self.js.run, script_url, body)
+            self.task_runner.schedule_task(task)
         self.rules = DEFAULT_STYLE_SHEET.copy()
         links = [
             node.attributes["href"]
