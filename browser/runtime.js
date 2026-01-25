@@ -99,3 +99,9 @@ function __runRAFHandlers() {
     handlers_copy[i]();
   }
 }
+
+Object.defineProperty(Node.prototype, 'style', {
+  set: function (s) {
+    call_python("style_set", this.handle, s.toString());
+  }
+});

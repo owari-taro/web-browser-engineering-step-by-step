@@ -82,6 +82,7 @@ class JSContext:
         self.interp.export_function("innerHTML_set", self.innerHTML_set)
         self.interp.export_function("XMLHttpRequest_send", self.XMLHttpRequest_send)
         self.interp.export_function("requestAnimationFrame", self.requestAnimationFrame)
+        self.interp.export_function("style_set", self.style_set)
         self.node_to_handle = {}
         self.handle_to_node = {}
         self.interp.export_function("setTimeout", self.setTimeout)
@@ -163,6 +164,11 @@ class JSContext:
 
     def requestAnimationFrame(self):
         self.tab.browser.set_needs_animation_frame(self.tab)
+
+    def style_set(self, handle, s):
+        elt = self.handle_to_node[handle]
+        elt.attributes["style"] = s
+        self.tab.set_needs_render()
 
     def run(self, script, code):
         try:
