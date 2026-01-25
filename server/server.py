@@ -28,6 +28,12 @@ def do_request(session, method, url, headers, body):
         return "200 OK", show_transparent_example()
     elif method == "GET" and url == "/clip":
         return "200 OK", clip_mask_example()
+    elif method == "GET" and url == "/css-transition":
+        return "200 OK", show_css_transition()
+    elif method == "GET" and url == "/example13-opacity-transition.css":
+        return "200 OK", show_css_transition_css()
+    elif method == "GET" and url == "/example13-opacity-transition.js":
+        return "200 OK", show_css_transition_js()
     elif method == "POST" and url == "/":
         params = form_decode(body)
         return do_login(session, params)
@@ -94,6 +100,44 @@ def do_login(session, params):
         out = "<!doctype html>"
         out += "<h1>Invalid password for {}</h1>".format(username)
         return "401 Unauthorized", out
+
+
+def show_css_transition():
+    return """
+<link rel=stylesheet href="example13-opacity-transition.css">
+<button>Fade out</button>
+<button>Fade in</button>
+<div>This text fades</div>
+<script src="example13-opacity-transition.js"></script>
+    """
+
+
+def show_css_transition_css():
+    return """
+div {
+    opacity: 0.999;
+    transition: opacity 2s;
+}
+"""
+
+
+def show_css_transition_js():
+    return """
+var div = document.querySelectorAll("div")[0];
+
+function start_fade_out(e) {
+    div.style = "opacity:0.1";
+    e.preventDefault();
+}
+
+function start_fade_in(e) {
+    div.style = "opacity:0.999";
+    e.preventDefault();
+}
+var buttons = document.querySelectorAll("button");
+buttons[0].addEventListener("click", start_fade_out);
+buttons[1].addEventListener("click", start_fade_in);
+"""
 
 
 def show_comments(session):
