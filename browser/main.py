@@ -1709,6 +1709,7 @@ class Tab:
         self.load(url, body)
 
     def click(self, x, y):
+        self.render()
         self.focus = None
         y += self.scroll
         objs = [
