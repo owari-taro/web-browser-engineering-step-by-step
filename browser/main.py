@@ -1520,37 +1520,41 @@ class Chrome:
         self.focus = None
 
     def paint(self):
+        color = "black"
+        if self.browser.dark_mode:
+            color = "white"
+        else:
+            color = "black"
         cmds = []
-        cmds.append(DrawRect(skia.Rect.MakeLTRB(0, 0, WIDTH, self.bottom), "white"))
-        cmds.append(DrawLine(0, self.bottom, WIDTH, self.bottom, "black", 1))
-        cmds.append(DrawOutline(self.newtab_rect, "black", 1))
+        cmds.append(DrawLine(0, self.bottom, WIDTH, self.bottom, color, 1))
+        cmds.append(DrawOutline(self.newtab_rect, color, 1))
         cmds.append(
             DrawText(
                 self.newtab_rect.left() + self.padding,
                 self.newtab_rect.top(),
                 "+",
                 self.font,
-                "black",
+                color,
             )
         )
-        cmds.append(DrawOutline(self.back_rect, "black", 1))
+        cmds.append(DrawOutline(self.back_rect, color, 1))
         cmds.append(
             DrawText(
                 self.back_rect.left() + self.padding,
                 self.back_rect.top(),
                 "<",
                 self.font,
-                "black",
+                color,
             )
         )
-        cmds.append(DrawOutline(self.address_rect, "black", 1))
+        cmds.append(DrawOutline(self.address_rect, color, 1))
         for i, tab in enumerate(self.browser.tabs):
             bounds = self.tab_rect(i)
             cmds.append(
-                DrawLine(bounds.left(), 0, bounds.left(), bounds.bottom(), "black", 1)
+                DrawLine(bounds.left(), 0, bounds.left(), bounds.bottom(), color, 1)
             )
             cmds.append(
-                DrawLine(bounds.right(), 0, bounds.right(), bounds.bottom(), "black", 1)
+                DrawLine(bounds.right(), 0, bounds.right(), bounds.bottom(), color, 1)
             )
             cmds.append(
                 DrawText(
@@ -1558,13 +1562,13 @@ class Chrome:
                     bounds.top() + self.padding,
                     "Tab {}".format(i),
                     self.font,
-                    "black",
+                    color,
                 )
             )
             if tab == self.browser.active_tab:
                 cmds.append(
                     DrawLine(
-                        0, bounds.bottom(), bounds.left(), bounds.bottom(), "black", 1
+                        0, bounds.bottom(), bounds.left(), bounds.bottom(), color, 1
                     )
                 )
                 cmds.append(
@@ -1573,7 +1577,7 @@ class Chrome:
                         bounds.bottom(),
                         WIDTH,
                         bounds.bottom(),
-                        "black",
+                        color,
                         1,
                     )
                 )
@@ -1584,7 +1588,7 @@ class Chrome:
                     self.address_rect.top(),
                     self.address_bar,
                     self.font,
-                    "black",
+                    color,
                 )
             )
             w = self.font.measureText(self.address_bar)
@@ -1606,7 +1610,7 @@ class Chrome:
                     self.address_rect.top(),
                     url,
                     self.font,
-                    "black",
+                    color,
                 )
             )
         return cmds
@@ -1631,6 +1635,8 @@ def mainloop(browser):
                         browser.increment_zoom(False)
                     elif event.key.keysym.sym == sdl2.SDLK_0:
                         browser.reset_zoom()
+                    elif event.key.keysym.sym == sdl2.SDLK_d:
+                        browser.toggle_dark_mode()
                 if event.key.keysym.sym == sdl2.SDLK_RETURN:
                     browser.handle_enter()
                 elif event.key.keysym.sym == sdl2.SDLK_DOWN:
@@ -1764,6 +1770,7 @@ class Browser:
     def __init__(self):
         self.measure = MeasureTime()
         self.animation_timer = None
+        self.dark_mode = False
         self.tabs = []
         self.lock = threading.Lock()
         self.active_tab = None
@@ -1934,6 +1941,11 @@ class Browser:
         task = Task(self.active_tab.reset_zoom)
         self.active_tab.task_runner.schedule_task(task)
 
+    def toggle_dark_mode(self):
+        self.dark_mode = not self.dark_mode
+        task = Task(self.active_tab.set_dark_mode, self.dark_mode)
+        self.active_tab.task_runner.schedule_task(task)
+
     def handle_down(self):
         self.lock.acquire(blocking=True)
         if not self.active_tab_height:
@@ -2061,13 +2073,20 @@ class Browser:
 
     def raster_chrome(self):
         canvas = self.chrome_surface.getCanvas()
-        canvas.clear(skia.ColorWHITE)
+        if self.dark_mode:
+            background_color = skia.ColorBLACK
+        else:
+            background_color = skia.ColorWHITE
+        canvas.clear(background_color)
         for cmd in self.chrome.paint():
             cmd.execute(canvas)
 
     def draw(self):
         canvas = self.root_surface.getCanvas()
-        canvas.clear(skia.ColorWHITE)
+        if self.dark_mode:
+            canvas.clear(skia.ColorBLACK)
+        else:
+            canvas.clear(skia.ColorWHITE)
 
         tab_rect = skia.Rect.MakeLTRB(0, self.chrome.bottom, WIDTH, HEIGHT)
         tab_offset = self.chrome.bottom - self.active_tab_scroll
@@ -2110,6 +2129,8 @@ class Browser:
         self.animation_timer = None
         self.clear_data()
         self.composited_layers = []
+        task = Task(self.active_tab.set_dark_mode, self.dark_mode)
+        self.active_tab.task_runner.schedule_task(task)
 
     def new_tab_internal(self, url):
         new_tab = Tab(self, HEIGHT - self.chrome.bottom)
@@ -2136,6 +2157,7 @@ class Tab:
         # 下矢印キーにscrolldownメソッドをバインド
         self.url = None
         self.tab_height = tab_height
+        self.dark_mode = browser.dark_mode
         self.history = []
         self.rules = []
         self.nodes = None
@@ -2151,6 +2173,10 @@ class Tab:
         self.scroll_changed_in_tab = False
         self.composited_updates = []
         self.zoom = 1
+
+    def set_dark_mode(self, val):
+        self.dark_mode = val
+        self.set_needs_render()
 
     def zoom_by(self, increment):
         if increment:
@@ -2357,6 +2383,10 @@ class Tab:
             return
         self.browser.measure.time("render")
         if self.needs_style:
+            if self.dark_mode:
+                INHERITED_PROPERTIES["color"] = "white"
+            else:
+                INHERITED_PROPERTIES["color"] = "black"
             style(self.nodes, sorted(self.rules, key=cascade_priority), self)
             self.needs_layout = True
             self.needs_style = False
