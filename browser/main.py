@@ -706,6 +706,7 @@ class Text:
         self.parent = parent
         self.style = {}
         self.animations = {}
+        self.is_focused = False
 
     def __repr__(self):
         return repr(self.text)
@@ -907,6 +908,32 @@ class DescendantSelector:
         return False
 
 
+class PseudoclassSelector:
+    def __init__(self, pseudoclass, base):
+        self.pseudoclass = pseudoclass
+        self.base = base
+        self.priority = self.base.priority
+
+    def matches(self, node):
+        if not self.base.matches(node):
+            return False
+        if self.pseudoclass == "focus":
+            return node.is_focused
+        else:
+            return False
+
+
+def parse_outline(outline_str):
+    if not outline_str:
+        return None
+    values = outline_str.split(" ")
+    if len(values) != 3:
+        return None
+    if values[1] != "solid":
+        return None
+    return int(values[0][:-2]), values[2]
+
+
 class CSSParser:
     def __init__(self, s):
         self.s = s
@@ -975,12 +1002,20 @@ class CSSParser:
             self.i += 1
         return self.s[start : self.i]
 
-    def selector(self):
+    def simple_selector(self):
         out = TagSelector(self.word().casefold())
+        if self.i < len(self.s) and self.s[self.i] == ":":
+            self.literal(":")
+            pseudoclass = self.word().casefold()
+            out = PseudoclassSelector(pseudoclass, out)
+        return out
+
+    def selector(self):
+        out = self.simple_selector()
         self.whitespace()
         while self.i < len(self.s) and self.s[self.i] != "{":
             tag = self.word()
-            descendant = TagSelector(tag.casefold())
+            descendant = self.simple_selector()
             out = DescendantSelector(out, descendant)
             self.whitespace()
         return out
@@ -1020,6 +1055,7 @@ class CSSParser:
                     self.whitespace()  # 空白
                     body = self.body()  # ボディ
                     self.literal("}")  # }
+                    self.whitespace()
                     rules.append((media, selector, body))
             except Exception:
                 why = self.ignore_until(["}"])
@@ -1328,6 +1364,15 @@ class LineLayout:
         return []
 
     def paint_effects(self, cmds):
+        outline_rect = skia.Rect.MakeEmpty()
+        outline_node = None
+        for child in self.children:
+            outline_str = child.node.parent.style.get("outline")
+            if parse_outline(outline_str):
+                outline_rect.join(child.self_rect())
+                outline_node = child.node.parent
+        if outline_node:
+            paint_outline(outline_node, cmds, outline_rect, self.zoom)
         return cmds
 
 
@@ -1337,6 +1382,14 @@ def linespace(font):
 
 
 INPUT_WIDTH_PX = 200
+
+
+def paint_outline(node, cmds, rect, zoom):
+    outline = parse_outline(node.style.get("outline"))
+    if not outline:
+        return
+    thickness, color = outline
+    cmds.append(DrawOutline(rect, color, dpx(thickness, zoom)))
 
 
 class InputLayout:
@@ -1397,6 +1450,8 @@ class InputLayout:
         return cmds
 
     def paint_effects(self, cmds):
+        cmds = paint_visual_effects(self.node, cmds, self.self_rect())
+        paint_outline(self.node, cmds, self.self_rect(), self.zoom)
         return cmds
 
 
@@ -1407,6 +1462,13 @@ class TextLayout:
         self.children = []
         self.parent = parent
         self.previous = previous
+        self.x = None
+        self.y = None
+
+    def self_rect(self):
+        return skia.Rect.MakeLTRB(
+            self.x, self.y, self.x + self.width, self.y + self.height
+        )
 
     def layout(self):
         self.zoom = self.parent.zoom
@@ -2255,6 +2317,32 @@ class Tab:
         self.scroll_changed_in_tab = False
         self.composited_updates = []
         self.zoom = 1
+        self.needs_focus_scroll = False
+
+    def scroll_to(self, elt):
+        objs = [
+            obj for obj in tree_to_list(self.document, []) if obj.node == self.focus
+        ]
+        if not objs:
+            return
+        obj = objs[0]
+        if self.scroll < obj.y < self.scroll + self.tab_height:
+            return
+
+        document_height = math.ceil(self.document.h + 2 * VSTEP)
+        new_scroll = obj.y - SCROLL_STEP
+        self.scroll = self.clamp_scroll(new_scroll)
+        self.scroll_changed_in_tab = True
+
+    def focus_element(self, node):
+        if node and node != self.focus:
+            self.needs_focus_scroll = True
+        if self.focus:
+            self.focus.is_focused = False
+        self.focus = node
+        if node:
+            node.is_focused = True
+        self.set_needs_render()
 
     def enter(self):
         if not self.focus:
@@ -2288,8 +2376,9 @@ class Tab:
         else:
             idx = 0
         if idx < len(focusable_nodes):
-            self.focus = focusable_nodes[idx]
+            self.focus_element(focusable_nodes[idx])
         else:
+            self.focus_element(None)
             self.focus = None
             self.browser.focus_addressbar()
         self.set_needs_render()
@@ -2380,7 +2469,7 @@ class Tab:
             if isinstance(elt, Text):
                 pass
             elif is_focusable(elt):
-                # self.focus_element(elt)
+                self.focus_element(elt)
                 self.activate_element(elt)
                 return
             elt = elt.parent
@@ -2402,6 +2491,10 @@ class Tab:
                     self.set_needs_paint()
 
         needs_composite = self.needs_style or self.needs_layout
+
+        if self.needs_focus_scroll and self.focus:
+            self.scroll_to(self.focus)
+        self.needs_focus_scroll = False
 
         self.render()
 
