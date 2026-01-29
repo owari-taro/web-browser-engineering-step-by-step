@@ -726,6 +726,7 @@ class Text:
         self.style = {}
         self.animations = {}
         self.is_focused = False
+        self.layout_object = None
 
     def __repr__(self):
         return repr(self.text)
@@ -740,6 +741,7 @@ class Element:
         self.is_focused = False
         self.style = {}
         self.animations = {}
+        self.layout_object = None
 
     def __repr__(self):
         return "<" + self.tag + ">"
@@ -750,6 +752,7 @@ class AccessibilityNode:
         self.node = node
         self.children = []
         self.text = ""
+        self.bounds = self.compute_bounds()
         if isinstance(node, Text):
             if is_focusable(node.parent):
                 self.role = "focusable text"
@@ -770,6 +773,41 @@ class AccessibilityNode:
                 self.role = "focusable"
             else:
                 self.role = "none"
+
+    def contains_point(self, x, y):
+        for bound in self.bounds:
+            if bound.contains(x, y):
+                return True
+        return False
+
+    def hit_test(self, x, y):
+        node = None
+        if self.contains_point(x, y):
+            node = self
+        for child in self.children:
+            res = child.hit_test(x, y)
+            if res:
+                node = res
+        return node
+
+    def compute_bounds(self):
+        if self.node.layout_object:
+            return [absolute_bounds_for_obj(self.node.layout_object)]
+        if isinstance(self.node, Text):
+            return []
+        inline = self.node.parent
+        bounds = []
+        while not inline.layout_object:
+            inline = inline.parent
+        for line in inline.layout_object.children:
+            line_bounds = skia.Rect.MakeEmpty()
+            for child in line.children:
+                if child.node.parent == self.node:
+                    line_bounds.join(
+                        skia.Rect.MakeXYWH(child.x, child.y, child.width, child.height)
+                    )
+            bounds.append(line_bounds)
+        return bounds
 
     def __repr__(self):
         return "role={} text={}".format(self.role, self.text)
@@ -1245,6 +1283,7 @@ class DocumentLayout:
         self.node = node
         self.parent = None
         self.children = []
+        node.layout_object = self
 
     def layout(self, zoom):
         self.zoom = zoom
@@ -1278,6 +1317,7 @@ class BlockLayout:
         self.height = None
         self.cursor_x = 0
         self.cursor_y = 0
+        node.layout_object = self
 
     def self_rect(self):
         return skia.Rect.MakeLTRB(
@@ -1426,6 +1466,7 @@ class LineLayout:
         self.parent = parent
         self.previous = previous
         self.children = []
+        node.layout_object = self
 
     def layout(self):
         self.zoom = self.parent.zoom
@@ -1494,6 +1535,7 @@ class InputLayout:
         self.y = None
         self.width = None
         self.height = None
+        node.layout_object = self
 
     def self_rect(self):
         return skia.Rect.MakeLTRB(
@@ -1556,6 +1598,7 @@ class TextLayout:
         self.previous = previous
         self.x = None
         self.y = None
+        node.layout_object = self
 
     def self_rect(self):
         return skia.Rect.MakeLTRB(
@@ -1871,6 +1914,8 @@ def mainloop(browser):
                         ctrl_down = False
             elif event.type == sdl2.SDL_TEXTINPUT:
                 browser.handle_key(event.text.text.decode("utf8"))
+            elif event.type == sdl2.SDL_MOUSEMOTION:
+                browser.handle_hover(event.motion)
         browser.composite_raster_and_draw()
         browser.schedule_animation_frame()
 
@@ -2078,6 +2123,15 @@ class Browser:
         self.last_tab_focus = None
         self.active_alerts = []
         self.spoken_alerts = []
+        self.pending_hover = None
+        self.hovered_a11y_node = None
+        self.needs_speak_hovered_node = False
+
+    def handle_hover(self, event):
+        if not self.accessibility_is_on or not self.accessibility_tree:
+            return
+        self.pending_hover = (event.x, event.y - self.chrome.bottom)
+        self.set_needs_accessibility()
 
     def update_accessibility(self):
         self.active_alerts = [
@@ -2116,6 +2170,9 @@ class Browser:
                 self.focus_a11y_node = nodes[0]
                 self.speak_node(self.focus_a11y_node, "element focused ")
             self.last_tab_focus = self.tab_focus
+        if self.needs_speak_hovered_node:
+            self.speak_node(self.hovered_a11y_node, "Hit test ")
+        self.needs_speak_hovered_node = False
 
     def handle_tab(self):
         self.focus = "content"
@@ -2333,6 +2390,23 @@ class Browser:
                     parent = parent.parent
             if not parent:
                 self.draw_list.append(current_effect)
+        if self.pending_hover:
+            (x, y) = self.pending_hover
+            y += self.active_tab_scroll
+            a11y_node = self.accessibility_tree.hit_test(x, y)
+            if a11y_node:
+                if (
+                    not self.hovered_a11y_node
+                    or a11y_node.node != self.hovered_a11y_node.node
+                ):
+                    self.needs_speak_hovered_node = True
+                self.hovered_a11y_node = a11y_node
+            self.pending_hover = None
+        if self.hovered_a11y_node:
+            for bound in self.hovered_a11y_node.bounds:
+                self.draw_list.append(
+                    DrawOutline(bound, "white" if self.dark_mode else "black", 2)
+                )
 
     def clear_data(self):
         self.active_tab_scroll = 0
