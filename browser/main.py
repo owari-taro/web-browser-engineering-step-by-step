@@ -98,10 +98,16 @@ class JSContext:
         self.interp.export_function("XMLHttpRequest_send", self.XMLHttpRequest_send)
         self.interp.export_function("requestAnimationFrame", self.requestAnimationFrame)
         self.interp.export_function("style_set", self.style_set)
+        self.interp.export_function("setAttribute", self.setAttribute)
         self.node_to_handle = {}
         self.handle_to_node = {}
         self.interp.export_function("setTimeout", self.setTimeout)
         self.discarded = False
+
+    def setAttribute(self, handle, attr, value):
+        elt = self.handle_to_node[handle]
+        elt.attributes[attr] = value
+        self.tab.set_needs_render()
 
     def get_handle(self, elt):
         if elt not in self.node_to_handle:
@@ -2070,8 +2076,29 @@ class Browser:
         self.has_spoken_document = False
         self.tab_focus = None
         self.last_tab_focus = None
+        self.active_alerts = []
+        self.spoken_alerts = []
 
     def update_accessibility(self):
+        self.active_alerts = [
+            node
+            for node in tree_to_list(self.accessibility_tree, [])
+            if node.role == "alert"
+        ]
+        for alert in self.active_alerts:
+            if alert not in self.spoken_alerts:
+                self.speak_node(alert, "New alert")
+                self.spoken_alerts.append(alert)
+        new_spoken_alerts = []
+        for old_node in self.spoken_alerts:
+            new_nodes = [
+                node
+                for node in tree_to_list(self.accessibility_tree, [])
+                if node.node == old_node.node and node.role == "alert"
+            ]
+            if new_nodes:
+                new_spoken_alerts.append(new_nodes[0])
+        self.spoken_alerts = new_spoken_alerts
         if not self.accessibility_tree:
             return
 
