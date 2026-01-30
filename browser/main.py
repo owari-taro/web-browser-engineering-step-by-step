@@ -15,6 +15,8 @@ import playsound
 
 SPEECH_FILE = "/tmp/speech-fragment.mp3"
 
+BROKEN_IMAGE = skia.Image.open("Broken_Image.png")
+
 
 def speak_text(text):
     print("SPEAK:", text)
@@ -153,6 +155,7 @@ class JSContext:
 
         def run_load():
             headers, response = full_url.request(self.tab.url, body)
+            response = response.decode("utf8", "replace")
             task = Task(self.dispatch_xhr_onload, response, handle)
             self.tab.task_runner.schedule_task(task)
             return response
@@ -361,6 +364,28 @@ class DrawRRect(PaintCommand):
     def execute(self, canvas):
         sk_color = parse_color(self.color)
         canvas.drawRRect(self.rrect, paint=skia.Paint(Color=sk_color))
+
+
+class DrawImage(PaintCommand):
+    def __init__(self, image, rect, quality):
+        super().__init__(rect)
+        self.image = image
+        self.quality = parse_image_rendering(quality)
+
+    def execute(self, canvas):
+        paint = skia.Paint(
+            FilterQuality=self.quality,
+        )
+        canvas.drawImageRect(self.image, self.rect, paint)
+
+
+def parse_image_rendering(quality):
+    if quality == "high-quality":
+        return skia.FilterQuality.kHigh_FilterQuality
+    elif quality == "crisp-edges":
+        return skia.FilterQuality.kLow_FilterQuality
+    else:
+        return skia.FilterQuality.kMedium_FilterQuality
 
 
 def paint_visual_effects(node, cmds, rect):
@@ -623,10 +648,10 @@ class URL:
             request += payload
         # リクエストをUTF-8でエンコードして送信します
         s.send(request.encode("utf8"))
-        response = s.makefile("r", encoding="utf8", newline="\r\n")
+        response = s.makefile("b")
 
         # レスポンスの最初の行（ステータスライン）を読み取ります
-        statusline = response.readline()
+        statusline = response.readline().decode("utf8")
         # ステータスラインをバージョン、ステータスコード、説明に分割します
         version, status, explanation = statusline.split(" ", 2)
 
@@ -634,7 +659,7 @@ class URL:
         response_headers = {}
         # ヘッダーを読み取るループ
         while True:
-            line = response.readline()
+            line = response.readline().decode("utf8")
             # 空行はヘッダーの終わりを示します
             if line == "\r\n":
                 break
@@ -742,6 +767,7 @@ class Element:
         self.style = {}
         self.animations = {}
         self.layout_object = None
+        self.encoded_data = None
 
     def __repr__(self):
         return "<" + self.tag + ">"
@@ -2773,6 +2799,7 @@ class Tab:
     def load(self, url, payload=None):
         self.focus = None
         headers, body = url.request(self.url, payload)
+        body = body.decode("utf8", "replace")
         self.scroll = 0
         self.zoom = 1
         self.scroll_changed_in_tab = True
@@ -2806,6 +2833,7 @@ class Tab:
                 continue
             try:
                 header, body = script_url.request(url)
+                body = body.decode("utf8", "replace")
             except:
                 continue
             task = Task(self.js.run, script_url, body)
@@ -2823,10 +2851,30 @@ class Tab:
             style_url = url.resolve(link)
             try:
                 header, body = style_url.request(url)
+                body = body.decode("utf8", "replace")
             except:
                 continue
             self.rules.extend(CSSParser(body).parse())
         style(self.nodes, sorted(self.rules, key=cascade_priority), self)
+        images = [
+            node
+            for node in tree_to_list(self.nodes, [])
+            if isinstance(node, Element) and node.tag == "img"
+        ]
+        for img in images:
+            src = img.attributes.get("src", "")
+            image_url = url.resolve(src)
+            assert self.allowed_request(image_url), (
+                "Blocked load of " + str(image_url) + " due to CSP"
+            )
+            try:
+                header, body = image_url.request(url)
+                img.encoded_data = body
+                data = skia.Data.MakeWithoutCopy(body)
+                img.image = skia.Image.MakeFromEncoded(data)
+            except Exception as e:
+                print("Image", image_url, "crashed", e)
+                img.image = BROKEN_IMAGE
         self.set_needs_render()
 
     def render(self):
