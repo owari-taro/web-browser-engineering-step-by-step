@@ -1447,11 +1447,14 @@ class DocumentLayout:
         self.children = []
         node.layout_object = self
 
-    def layout(self, zoom):
+    def layout(self, width, zoom):
+        if not self.children:
+            child = BlockLayout(self.node, self, None, self.frame)
+        else:
+            child = self.children[0]
+        self.children = [child]
         self.zoom = zoom
-        child = BlockLayout(self.node, self, None, self.frame)
-        self.children.append(child)
-        self.width = WIDTH - 2 * dpx(HSTEP, self.zoom)
+        self.width = width
         self.x = dpx(HSTEP, self.zoom)
         self.y = dpx(VSTEP, self.zoom)
         child.layout()
@@ -1527,11 +1530,13 @@ class BlockLayout:
         mode = self.layout_mode()
         if mode == "block":
             previous = None
+            self.children = []
             for child in self.node.children:
                 next = BlockLayout(child, self, previous, self.frame)
                 self.children.append(next)
                 previous = next
         else:
+            self.children = []
             self.new_line()
             self.recurse(self.node)
         for child in self.children:
@@ -2928,8 +2933,7 @@ class Frame:
             self.needs_style = False
 
         if self.needs_layout:
-            self.document = DocumentLayout(self.nodes, self)
-            self.document.layout(self.zoom)
+            self.document.layout(self.frame_width, self.zoom)
             self.tab.needs_accessibility = True
             self.needs_paint = True
             self.needs_layout = False
@@ -3030,6 +3034,7 @@ class Frame:
             iframe.frame = Frame(self.tab, self, iframe)
             task = Task(iframe.frame.load, document_url)
             self.tab.task_runner.schedule_task(task)
+        self.document = DocumentLayout(self.nodes, self)
         self.set_needs_render()
         self.loaded = True
 
