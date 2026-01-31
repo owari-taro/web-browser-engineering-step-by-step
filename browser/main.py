@@ -1489,7 +1489,7 @@ class BlockLayout:
         else:
             if node.tag == "br":
                 self.new_line()
-            elif node.tag == "input" or node.tag == "button":
+            elif (node.tag == "input" and node.attributes.get("type") != "hidden") or node.tag == "button":
                 self.input(node)
             elif node.tag == "img":
                 self.image(node)
@@ -2447,6 +2447,7 @@ class Browser:
             else:
                 self.set_needs_draw()
             self.tab_focus = data.focus
+            self.root_frame_focused = data.root_frame_focused
         self.lock.release()
 
     def get_latest(self, effect):
@@ -2511,12 +2512,17 @@ class Browser:
 
     def handle_down(self):
         self.lock.acquire(blocking=True)
-        if not self.active_tab_height:
-            self.lock.release()
-            return
-        self.active_tab_scroll = self.clamp_scroll(self.active_tab_scroll + SCROLL_STEP)
-        self.set_needs_raster()
-        self.needs_animation_frame = True
+        if self.root_frame_focused:
+            if not self.active_tab_height:
+                self.lock.release()
+                return
+            self.active_tab_scroll = self.clamp_scroll(
+                self.active_tab_scroll + SCROLL_STEP
+            )
+            self.set_needs_raster()
+            self.needs_animation_frame = True
+        task = Task(self.active_tab.scrolldown)
+        self.active_tab.task_runner.schedule_task(task)
         self.lock.release()
 
     def handle_click(self, e):
@@ -2757,6 +2763,25 @@ class Frame:
         self.frame_width = 0
         self.frame_height = 0
 
+    def advance_tab(self):
+        focusable_nodes = [
+            node
+            for node in tree_to_list(self.nodes, [])
+            if isinstance(node, Element) and is_focusable(node)
+        ]
+        focusable_nodes.sort(key=get_tabindex)
+        if self.focus in focusable_nodes:
+            idx = focusable_nodes.index(self.focus) + 1
+        else:
+            idx = 0
+        if idx < len(focusable_nodes):
+            self.focus_element(focusable_nodes[idx])
+        else:
+            self.focus_element(None)
+            self.focus = None
+            self.tab.browser.focus_addressbar()
+        self.set_needs_render()
+
     def set_needs_render(self):
         self.needs_style = True
         self.tab.set_needs_accessibility()
@@ -2769,6 +2794,19 @@ class Frame:
 
     def allowed_request(self, url):
         return self.allowed_origins == None or url.origin() in self.allowed_origins
+
+    def focus_element(self, node):
+        if node and node != self.tab.focus:
+            self.needs_focus_scroll = True
+        if self.tab.focus:
+            self.tab.focus.is_focused = False
+        self.tab.focus = node
+        if self.tab.focused_frame and self.tab.focused_frame != self:
+            self.tab.focused_frame.set_needs_render()
+        self.tab.focused_frame = self
+        if node:
+            node.is_focused = True
+        self.set_needs_render()
 
     def render(self):
         if self.needs_style:
@@ -2885,6 +2923,15 @@ class Frame:
         self.set_needs_render()
         self.loaded = True
 
+    def keypress(self, char):
+        if self.tab.focus and self.tab.focus.tag == "input":
+            if not "value" in self.tab.focus.attributes:
+                self.activate_element(self.tab.focus)
+            if self.js.dispatch_event("keydown", self.tab.focus):
+                return
+            self.tab.focus.attributes["value"] += char
+            self.set_needs_render()
+
 
 class Tab:
     def __init__(self, browser, tab_height):
@@ -2897,7 +2944,6 @@ class Tab:
         self.history = []
         self.rules = []
         self.nodes = None
-        self.focus = None
         self.task_runner = TaskRunner(self)
         self.task_runner.start_thread()
         self.needs_render = False
@@ -2911,6 +2957,8 @@ class Tab:
         self.accessibility_tree = None
         self.root_frame = None
         self.window_id_to_frame = {}
+        self.focus = None
+        self.focused_frame = None
 
     def set_needs_accessibility(self):
         self.needs_accessibility = True
@@ -2933,16 +2981,6 @@ class Tab:
         self.scroll = self.clamp_scroll(new_scroll)
         self.scroll_changed_in_tab = True
 
-    def focus_element(self, node):
-        if node and node != self.focus:
-            self.needs_focus_scroll = True
-        if self.focus:
-            self.focus.is_focused = False
-        self.focus = node
-        if node:
-            node.is_focused = True
-        self.set_needs_render()
-
     def enter(self):
         if not self.focus:
             return
@@ -2964,23 +3002,8 @@ class Tab:
                 elt = elt.parent
 
     def advance_tab(self):
-        focusable_nodes = [
-            node
-            for node in tree_to_list(self.root_frame.nodes, [])
-            if isinstance(node, Element) and is_focusable(node)
-        ]
-        focusable_nodes.sort(key=get_tabindex)
-        if self.focus in focusable_nodes:
-            idx = focusable_nodes.index(self.focus) + 1
-        else:
-            idx = 0
-        if idx < len(focusable_nodes):
-            self.focus_element(focusable_nodes[idx])
-        else:
-            self.focus_element(None)
-            self.focus = None
-            self.browser.focus_addressbar()
-        self.set_needs_render()
+        frame = self.focused_frame or self.root_frame
+        frame.advance_tab()
 
     def set_dark_mode(self, val):
         self.dark_mode = val
@@ -3021,13 +3044,9 @@ class Tab:
         self.browser.set_needs_animation_frame(self)
 
     def keypress(self, char):
-        if self.focus and self.focus.tag == "input":
-            if not "value" in self.focus.attributes:
-                self.activate_element(self.focus)
-            if self.root_frame.js.dispatch_event("keydown", self.focus):
-                return
-            self.focus.attributes["value"] += char
-            self.set_needs_render()
+        frame = self.focused_frame or self.root_frame
+        if frame:
+            frame.keypress(char)
 
     def submit_form(self, elt):
         if self.root_frame.js.dispatch_event("submit", elt):
@@ -3055,7 +3074,6 @@ class Tab:
 
     def click(self, x, y):
         self.render()
-        self.focus = None
         y += self.scroll
         loc_rect = skia.Rect.MakeXYWH(x, y, 1, 1)
         objs = [
@@ -3070,8 +3088,15 @@ class Tab:
             if isinstance(elt, Text):
                 pass
             elif is_focusable(elt):
-                self.focus_element(elt)
+                self.root_frame.focus_element(elt)
                 self.activate_element(elt)
+                return
+            elif elt.tag == "iframe":
+                abs_bounds = absolute_bounds_for_obj(elt.layout_object)
+                border = dpx(1, elt.layout_object.zoom)
+                new_x = x - abs_bounds.left() - border
+                new_y = y - abs_bounds.top() - border
+                elt.frame.click(new_x, new_y)
                 return
             elt = elt.parent
 
@@ -3080,6 +3105,9 @@ class Tab:
         self.scroll = min(self.scroll + SCROLL_STEP, max_y)
 
     def run_animation_frame(self, scroll):
+        root_frame_focused = (
+            not self.focused_frame or self.focused_frame == self.root_frame
+        )
         for window_id, frame in self.window_id_to_frame.items():
             if not frame.loaded:
                 continue
@@ -3116,6 +3144,7 @@ class Tab:
         commit_data = CommitData(
             self.root_frame.url,
             self.scroll if self.scroll_changed_in_tab else None,
+            root_frame_focused,
             document_height,
             self.display_list,
             composited_updates,
@@ -3177,6 +3206,7 @@ class CommitData:
         self,
         url,
         scroll,
+        root_frame_focused,
         height,
         display_list,
         composited_updates,
@@ -3190,6 +3220,7 @@ class CommitData:
         self.composited_updates = composited_updates
         self.accessibility_tree = accessibility_tree
         self.focus = focus
+        self.root_frame_focused = root_frame_focused
 
 
 class MeasureTime:
