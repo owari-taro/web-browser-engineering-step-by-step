@@ -93,6 +93,7 @@ class ProtectedField:
     def __init__(self):
         self.value = None
         self.dirty = True
+        self.invalidations = set()
 
     def mark(self):
         if self.dirty:
@@ -104,8 +105,20 @@ class ProtectedField:
         return self.value
 
     def set(self, value):
+        self.notify()
         self.value = value
         self.dirty = False
+
+    def notify(self):
+        for field in self.invalidations:
+            field.mark()
+
+    def read(self, notify):
+        self.invalidations.add(notify)
+        return self.get()
+
+    def copy(self, field):
+        self.set(field.read(notify=self))
 
 
 class JSContext:
@@ -1052,7 +1065,7 @@ def paint_tree(layout_object, display_list):
     ):
         paint_tree(layout_object.node.frame.document, cmds)
     else:
-        for child in layout_object.children:
+        for child in layout_object.children.get():
             paint_tree(child, cmds)
 
     cmds = layout_object.paint_effects(cmds)
@@ -1061,7 +1074,12 @@ def paint_tree(layout_object, display_list):
 
 def tree_to_list(tree, list):
     list.append(tree)
-    for child in tree.children:
+    
+    children_list = tree.children
+    if isinstance(children_list, ProtectedField):
+        children_list = children_list.get()
+
+    for child in children_list:
         tree_to_list(child, list)
     return list
 
@@ -1460,24 +1478,27 @@ def diff_styles(old_style, new_style):
 
 
 def dpx(css_px, zoom):
-    return css_px * zoom
+    return css_px * zoom.get()
 
 
 class DocumentLayout:
     def __init__(self, node, frame):
         self.node = node
         self.frame = frame
+        self.zoom = ProtectedField()
         self.parent = None
-        self.children = []
+        self.children = ProtectedField()
         node.layout_object = self
 
     def layout(self, width, zoom):
-        if not self.children:
+        if self.children.dirty:
             child = BlockLayout(self.node, self, None, self.frame)
+            self.children.set([child])
         else:
-            child = self.children[0]
-        self.children = [child]
-        self.zoom = zoom
+            child = self.children.get()[0]
+
+        self.zoom.set(zoom)
+        child.zoom.mark()
         self.width = width
         self.x = dpx(HSTEP, self.zoom)
         self.y = dpx(VSTEP, self.zoom)
@@ -1509,6 +1530,8 @@ class BlockLayout:
         node.layout_object = self
         self.frame = frame
         self.children_dirty = True
+        self.zoom = ProtectedField()
+        self.parent.zoom.invalidations.add(self.zoom)
 
     def self_rect(self):
         return skia.Rect.MakeLTRB(
@@ -1518,13 +1541,15 @@ class BlockLayout:
     def add_inline_child(self, node, w, child_class, frame, word=None):
         if self.cursor_x + w > self.x + self.width:
             self.new_line()
-        line = self.children[-1]
-        previous_word = line.children[-1] if line.children else None
+        line = self.children.get()[-1]
+        previous_word = line.children.get()[-1] if line.children.get() else None
         if word:
             child = child_class(node, word, line, previous_word)
         else:
             child = child_class(node, line, previous_word, frame)
-        line.children.append(child)
+        children = line.children.get()
+        children.append(child)
+        line.children.set(children)
         self.cursor_x += w + font(node.style, self.zoom).measureText(" ")
 
     def layout_mode(self):
@@ -1545,7 +1570,7 @@ class BlockLayout:
             return "block"
 
     def layout(self):
-        self.zoom = self.parent.zoom
+        self.zoom.copy(self.parent.zoom)
         self.x = self.parent.x
         self.width = self.parent.width
         if self.previous:
@@ -1564,12 +1589,13 @@ class BlockLayout:
                 self.children.set(children)
                 self.children_dirty = False
         else:
-            self.children = []
+            self.children.set([])
             self.new_line()
             self.recurse(self.node)
             self.children_dirty = False
         assert not self.children_dirty
         for child in self.children.get():
+            child.zoom.mark()
             child.layout()
         assert not self.children_dirty
         self.height = sum([child.height for child in self.children.get()])
@@ -1601,12 +1627,15 @@ class BlockLayout:
 
     def new_line(self):
         self.cursor_x = 0
-        last_line = self.children[-1] if self.children else None
+        last_line = self.children.get()[-1] if self.children.get() else None
         new_line = LineLayout(self.node, self, last_line)
-        self.children.append(new_line)
+        children = self.children.get()
+        children.append(new_line)
+        self.children.set(children)
 
     def input(self, node):
-        w = dpx(INPUT_WIDTH_PX, self.zoom)
+        zoom = self.zoom.read(notify=self.children)
+        w = dpx(INPUT_WIDTH_PX, zoom)
         self.add_inline_child(node, w, InputLayout, self.frame)
 
     def image(self, node):
@@ -1680,33 +1709,35 @@ class LineLayout:
         self.node = node
         self.parent = parent
         self.previous = previous
-        self.children = []
+        self.children = ProtectedField()
+        self.children.set([])
         node.layout_object = self
+        self.zoom = ProtectedField()
 
     def layout(self):
-        self.zoom = self.parent.zoom
+        self.zoom.copy(self.parent.zoom)
         self.width = self.parent.width
         self.x = self.parent.x
         if self.previous:
             self.y = self.previous.y + self.previous.height
         else:
             self.y = self.parent.y
-        for word in self.children:
+        for word in self.children.get():
             word.layout()
 
-        if not self.children:
+        if not self.children.get():
             self.height = 0
             return
 
-        max_ascent = max([-child.ascent for child in self.children])
+        max_ascent = max([-child.ascent for child in self.children.get()])
         baseline = self.y + max_ascent
 
-        for child in self.children:
+        for child in self.children.get():
             if isinstance(child, TextLayout):
                 child.y = baseline + child.ascent / 1.25
             else:
                 child.y = baseline + child.ascent
-        max_descent = max([child.descent for child in self.children])
+        max_descent = max([child.descent for child in self.children.get()])
         self.height = max_ascent + max_descent
 
     def should_paint(self):
@@ -1718,7 +1749,7 @@ class LineLayout:
     def paint_effects(self, cmds):
         outline_rect = skia.Rect.MakeEmpty()
         outline_node = None
-        for child in self.children:
+        for child in self.children.get():
             outline_str = child.node.parent.style.get("outline")
             if parse_outline(outline_str):
                 outline_rect.join(child.self_rect())
@@ -1747,7 +1778,8 @@ def paint_outline(node, cmds, rect, zoom):
 class EmbedLayout:
     def __init__(self, node, parent, previous, frame=None):
         self.node = node
-        self.children = []
+        self.children = ProtectedField()
+        self.children.set([])
         self.parent = parent
         self.previous = previous
         self.x = None
@@ -1755,6 +1787,7 @@ class EmbedLayout:
         self.width = None
         self.height = None
         node.layout_object = self
+        self.zoom = ProtectedField()
 
     def self_rect(self):
         return skia.Rect.MakeLTRB(
@@ -1762,7 +1795,7 @@ class EmbedLayout:
         )
 
     def layout(self):
-        self.zoom = self.parent.zoom
+        self.zoom.set(self.parent.zoom)
         self.font = font(self.node.style, self.zoom)
         if self.previous:
             space = self.previous.font.measureText(" ")
@@ -1931,7 +1964,8 @@ class TextLayout:
     def __init__(self, node, word, parent, previous):
         self.node = node
         self.word = word
-        self.children = []
+        self.children = ProtectedField()
+        self.children.set([])
         self.parent = parent
         self.previous = previous
         self.x = None
