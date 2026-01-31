@@ -89,6 +89,25 @@ REFRESH_RATE_SEC = 0.033
 SHOW_COMPOSITED_LAYER_BORDERS = False
 
 
+class ProtectedField:
+    def __init__(self):
+        self.value = None
+        self.dirty = True
+
+    def mark(self):
+        if self.dirty:
+            return
+        self.dirty = True
+
+    def get(self):
+        assert not self.dirty
+        return self.value
+
+    def set(self, value):
+        self.value = value
+        self.dirty = False
+
+
 class JSContext:
     def __init__(self, tab, url_origin):
         self.tab = tab
@@ -194,6 +213,7 @@ class JSContext:
         while not isinstance(obj, BlockLayout):
             obj = obj.parent
         obj.children_dirty = True
+        obj.children.mark()
         frame.set_needs_render()
 
     def XMLHttpRequest_send(self, method, url, body, isasync, handle, window_id):
@@ -1479,7 +1499,7 @@ class BlockLayout:
         self.node = node
         self.parent = parent
         self.previous = previous
-        self.children = []
+        self.children = ProtectedField()
         self.x = None
         self.y = None
         self.width = None
@@ -1535,12 +1555,13 @@ class BlockLayout:
         mode = self.layout_mode()
         if mode == "block":
             if self.children_dirty:
-                self.children = []
+                children = []
                 previous = None
                 for child in self.node.children:
                     next = BlockLayout(child, self, previous, self.frame)
-                    self.children.append(next)
+                    children.append(next)
                     previous = next
+                self.children.set(children)
                 self.children_dirty = False
         else:
             self.children = []
@@ -1548,10 +1569,10 @@ class BlockLayout:
             self.recurse(self.node)
             self.children_dirty = False
         assert not self.children_dirty
-        for child in self.children:
+        for child in self.children.get():
             child.layout()
         assert not self.children_dirty
-        self.height = sum([child.height for child in self.children])
+        self.height = sum([child.height for child in self.children.get()])
 
     def flush(self):
         # 行内の最大アセントを計算
@@ -3071,6 +3092,7 @@ class Frame:
             while not isinstance(obj, BlockLayout):
                 obj = obj.parent
             obj.children_dirty = True
+            obj.children.mark()
             self.set_needs_render()
 
     def submit_form(self, elt):
