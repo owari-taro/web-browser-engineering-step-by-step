@@ -65,6 +65,8 @@ def do_request(session, method, url, headers, body):
         return "200 OK", show_img()
     elif method == "GET" and url == "/hes.jpg":
         return "200 OK", open("hes.jpg", "rb").read()
+    elif method == "GET" and url == "/contenteditable":
+        return "200 OK", show_contenteditable()
     else:
         return "404 Not Found", not_found(url, method)
 
@@ -110,6 +112,12 @@ function run_animation_frame() {
 }
 window.requestAnimationFrame(run_animation_frame);
     """
+
+
+def show_contenteditable():
+    out = "<!doctype html>"
+    out += "<div contenteditable=true>This text is editable</div>"
+    return out
 
 
 def do_login(session, params):

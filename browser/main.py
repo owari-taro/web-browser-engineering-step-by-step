@@ -434,6 +434,11 @@ class DrawImage(PaintCommand):
         canvas.drawImageRect(self.image, self.rect, paint)
 
 
+def DrawCursor(elt, offset):
+    x = elt.x + offset
+    return DrawLine(x, elt.y, x, elt.y + elt.height, "red", 3)
+
+
 def parse_image_rendering(quality):
     if quality == "high-quality":
         return skia.FilterQuality.kHigh_FilterQuality
@@ -796,6 +801,8 @@ def is_focusable(node):
     if get_tabindex(node) < 0:
         return False
     elif "tabindex" in node.attributes:
+        return True
+    elif "contenteditable" in node.attributes:
         return True
     else:
         return node.tag in ["input", "button", "a"]
@@ -1616,6 +1623,14 @@ class BlockLayout:
         if bgcolor != "transparent":
             radius = float(self.node.style.get("border-radius", "0px")[:-2])
             cmds.append(DrawRRect(self.self_rect(), radius, bgcolor))
+        if self.node.is_focused and "contenteditable" in self.node.attributes:
+            text_nodes = [
+                t for t in tree_to_list(self, []) if isinstance(t, TextLayout)
+            ]
+            if text_nodes:
+                cmds.append(DrawCursor(text_nodes[-1], text_nodes[-1].width))
+            else:
+                cmds.append(DrawCursor(self, 0))
         return cmds
 
     def paint_effects(self, cmds):
@@ -1827,8 +1842,7 @@ class InputLayout(EmbedLayout):
         cmds.append(DrawText(self.x, self.y, text, self.font, color))
 
         if self.node.is_focused and self.node.tag == "input":
-            cx = self.x + self.font.measureText(text)
-            cmds.append(DrawLine(cx, self.y, cx, self.y + self.height, color, 1))
+            cmds.append(DrawCursor(self, self.font.measureText(text)))
 
         return cmds
 
@@ -3026,6 +3040,17 @@ class Frame:
             if self.js.dispatch_event("keydown", self.tab.focus, self.window_id):
                 return
             self.tab.focus.attributes["value"] += char
+            self.set_needs_render()
+        elif self.tab.focus and "contenteditable" in self.tab.focus.attributes:
+            text_nodes = [
+                t for t in tree_to_list(self.tab.focus, []) if isinstance(t, Text)
+            ]
+            if text_nodes:
+                last_text = text_nodes[-1]
+            else:
+                last_text = Text("", self.tab.focus)
+                self.tab.focus.children.append(last_text)
+            last_text.text += char
             self.set_needs_render()
 
     def submit_form(self, elt):
