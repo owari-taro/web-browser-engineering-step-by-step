@@ -1471,13 +1471,22 @@ class BlockLayout:
                 self.input(node)
             elif node.tag == "img":
                 self.image(node)
+            elif node.tag == "iframe" and "src" in node.attributes:
+                self.iframe(node)
             else:
                 for child in node.children:
                     self.recurse(child)
 
+    def iframe(self, node):
+        if "width" in self.node.attributes:
+            w = dpx(int(self.node.attributes["width"]), self.zoom)
+        else:
+            w = IFRAME_WIDTH_PX + dpx(2, self.zoom)
+        self.add_inline_child(node, w, IframeLayout, self.frame)
+
     def should_paint(self):
         return isinstance(self.node, Text) or (
-            self.node.tag not in ["input", "button", "img"]
+            self.node.tag not in ["input", "button", "img", "iframe"]
         )
 
     def paint(self):
@@ -2660,6 +2669,122 @@ class Browser:
         self.lock.release()
 
 
+class Frame:
+    def __init__(self, tab, parent_frame, frame_element):
+        # スクロール位置を初期化
+        self.scroll = 0
+        # 下矢印キーにscrolldownメソッドをバインド
+        self.document = None
+        self.url = None
+        self.nodes = None
+        self.js = None
+        self.needs_focus_scroll = False
+        self.tab = tab
+        self.parent_frame = parent_frame
+        self.frame_element = frame_element
+        self.loaded = False
+        self.window_id = len(self.tab.window_id_to_frame)
+        self.tab.window_id_to_frame[self.window_id] = self
+
+    # URLからWebページを読み込み、表示する関数
+    def load(self, url, payload=None):
+        self.loaded = False
+        self.focus = None
+        self.url = url
+        headers, body = url.request(self.url, payload)
+        body = body.decode("utf8", "replace")
+        self.scroll = 0
+        self.zoom = 1
+        self.scroll_changed_in_tab = True
+        self.nodes = HTMLParser(body).parse()
+
+        self.allowed_origins = None
+        if "content-security-policy" in headers:
+            csp = headers["content-security-policy"].split()
+            if len(csp) > 0 and csp[0] == "default-src":
+                self.allowed_origins = []
+                for origin in csp[1:]:
+                    self.allowed_origins.append(URL(origin).origin())
+
+        scripts = [
+            node.attributes["src"]
+            for node in tree_to_list(self.nodes, [])
+            if isinstance(node, Element)
+            and node.tag == "script"
+            and "src" in node.attributes
+        ]
+        if self.js:
+            self.js.discarded = True
+        self.js = JSContext(self)
+        for script in scripts:
+            script_url = url.resolve(script)
+            if not self.allowed_request(script_url):
+                print("Blocked script", script, "due to CSP")
+                continue
+            try:
+                header, body = script_url.request(url)
+                body = body.decode("utf8", "replace")
+            except:
+                continue
+            task = Task(self.js.run, script_url, body)
+            self.task_runner.schedule_task(task)
+        self.rules = DEFAULT_STYLE_SHEET.copy()
+        links = [
+            node.attributes["href"]
+            for node in tree_to_list(self.nodes, [])
+            if isinstance(node, Element)
+            and node.tag == "link"
+            and node.attributes.get("rel") == "stylesheet"
+            and "href" in node.attributes
+        ]
+        for link in links:
+            style_url = url.resolve(link)
+            try:
+                header, body = style_url.request(url)
+                body = body.decode("utf8", "replace")
+            except:
+                continue
+            self.rules.extend(CSSParser(body).parse())
+        style(self.nodes, sorted(self.rules, key=cascade_priority), self)
+        images = [
+            node
+            for node in tree_to_list(self.nodes, [])
+            if isinstance(node, Element) and node.tag == "img"
+        ]
+        for img in images:
+            src = img.attributes.get("src", "")
+            image_url = url.resolve(src)
+            assert self.allowed_request(image_url), (
+                "Blocked load of " + str(image_url) + " due to CSP"
+            )
+            try:
+                header, body = image_url.request(url)
+                img.encoded_data = body
+                data = skia.Data.MakeWithoutCopy(body)
+                img.image = skia.Image.MakeFromEncoded(data)
+            except Exception as e:
+                print("Image", image_url, "crashed", e)
+                img.image = BROKEN_IMAGE
+        iframes = [
+            node
+            for node in tree_to_list(self.nodes, [])
+            if isinstance(node, Element)
+            and node.tag == "iframe"
+            and "src" in node.attributes
+        ]
+        for iframe in iframes:
+            document_url = url.resolve(iframe.attributes["src"])
+            if not self.allowed_request(document_url):
+                print("Blocked iframe", document_url, "due to CSP")
+                iframe.frame = None
+                continue
+            iframe.frame = Frame(self.tab, self, iframe)
+            task = Task(iframe.frame.load, document_url)
+            self.tab.task_runner.schedule_task(task)
+        self.set_needs_render()
+        self.loaded = True
+
+
 class Tab:
     def __init__(self, browser, tab_height):
         # スクロール位置を初期化
@@ -2673,8 +2798,6 @@ class Tab:
         self.nodes = None
         self.focus = None
         self.task_runner = TaskRunner(self)
-        self.task_runner.start_thread()
-        self.js = None
         self.needs_render = False
         self.needs_style = False
         self.needs_layout = False
@@ -2686,6 +2809,8 @@ class Tab:
         self.needs_focus_scroll = False
         self.needs_accessibility = False
         self.accessibility_tree = None
+        self.root_frame = None
+        self.window_id_to_frame = {}
 
     def scroll_to(self, elt):
         objs = [
@@ -2887,87 +3012,11 @@ class Tab:
         self.browser.commit(self, commit_data)
         self.scroll_changed_in_tab = False
 
-    # URLからWebページを読み込み、表示する関数
     def load(self, url, payload=None):
-        self.focus = None
-        headers, body = url.request(self.url, payload)
-        body = body.decode("utf8", "replace")
-        self.scroll = 0
-        self.zoom = 1
-        self.scroll_changed_in_tab = True
-        self.task_runner.clear_pending_tasks()
         self.history.append(url)
-        self.url = url
-        self.nodes = HTMLParser(body).parse()
-
-        self.allowed_origins = None
-        if "content-security-policy" in headers:
-            csp = headers["content-security-policy"].split()
-            if len(csp) > 0 and csp[0] == "default-src":
-                self.allowed_origins = []
-                for origin in csp[1:]:
-                    self.allowed_origins.append(URL(origin).origin())
-
-        scripts = [
-            node.attributes["src"]
-            for node in tree_to_list(self.nodes, [])
-            if isinstance(node, Element)
-            and node.tag == "script"
-            and "src" in node.attributes
-        ]
-        if self.js:
-            self.js.discarded = True
-        self.js = JSContext(self)
-        for script in scripts:
-            script_url = url.resolve(script)
-            if not self.allowed_request(script_url):
-                print("Blocked script", script, "due to CSP")
-                continue
-            try:
-                header, body = script_url.request(url)
-                body = body.decode("utf8", "replace")
-            except:
-                continue
-            task = Task(self.js.run, script_url, body)
-            self.task_runner.schedule_task(task)
-        self.rules = DEFAULT_STYLE_SHEET.copy()
-        links = [
-            node.attributes["href"]
-            for node in tree_to_list(self.nodes, [])
-            if isinstance(node, Element)
-            and node.tag == "link"
-            and node.attributes.get("rel") == "stylesheet"
-            and "href" in node.attributes
-        ]
-        for link in links:
-            style_url = url.resolve(link)
-            try:
-                header, body = style_url.request(url)
-                body = body.decode("utf8", "replace")
-            except:
-                continue
-            self.rules.extend(CSSParser(body).parse())
-        style(self.nodes, sorted(self.rules, key=cascade_priority), self)
-        images = [
-            node
-            for node in tree_to_list(self.nodes, [])
-            if isinstance(node, Element) and node.tag == "img"
-        ]
-        for img in images:
-            src = img.attributes.get("src", "")
-            image_url = url.resolve(src)
-            assert self.allowed_request(image_url), (
-                "Blocked load of " + str(image_url) + " due to CSP"
-            )
-            try:
-                header, body = image_url.request(url)
-                img.encoded_data = body
-                data = skia.Data.MakeWithoutCopy(body)
-                img.image = skia.Image.MakeFromEncoded(data)
-            except Exception as e:
-                print("Image", image_url, "crashed", e)
-                img.image = BROKEN_IMAGE
-        self.set_needs_render()
+        self.task_runner.clear_pending_tasks()
+        self.root_frame = Frame(self, None, None)
+        self.root_frame.load(url, payload)
 
     def render(self):
         if not self.needs_render:
