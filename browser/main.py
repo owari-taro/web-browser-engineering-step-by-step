@@ -190,6 +190,10 @@ class JSContext:
         elt.children = new_nodes
         for child in elt.children:
             child.parent = elt
+        obj = elt.layout_object
+        while not isinstance(obj, BlockLayout):
+            obj = obj.parent
+        obj.children_dirty = True
         frame.set_needs_render()
 
     def XMLHttpRequest_send(self, method, url, body, isasync, handle, window_id):
@@ -1484,6 +1488,7 @@ class BlockLayout:
         self.cursor_y = 0
         node.layout_object = self
         self.frame = frame
+        self.children_dirty = True
 
     def self_rect(self):
         return skia.Rect.MakeLTRB(
@@ -1529,18 +1534,23 @@ class BlockLayout:
             self.y = self.parent.y
         mode = self.layout_mode()
         if mode == "block":
-            previous = None
-            self.children = []
-            for child in self.node.children:
-                next = BlockLayout(child, self, previous, self.frame)
-                self.children.append(next)
-                previous = next
+            if self.children_dirty:
+                self.children = []
+                previous = None
+                for child in self.node.children:
+                    next = BlockLayout(child, self, previous, self.frame)
+                    self.children.append(next)
+                    previous = next
+                self.children_dirty = False
         else:
             self.children = []
             self.new_line()
             self.recurse(self.node)
+            self.children_dirty = False
+        assert not self.children_dirty
         for child in self.children:
             child.layout()
+        assert not self.children_dirty
         self.height = sum([child.height for child in self.children])
 
     def flush(self):
@@ -1619,6 +1629,7 @@ class BlockLayout:
         )
 
     def paint(self):
+        assert not self.children_dirty
         cmds = []
         if isinstance(self.node, Element) and self.node.tag == "pre":
             x2, y2 = self.x + self.width, self.y + self.height
@@ -3056,6 +3067,10 @@ class Frame:
                 last_text = Text("", self.tab.focus)
                 self.tab.focus.children.append(last_text)
             last_text.text += char
+            obj = self.tab.focus.layout_object
+            while not isinstance(obj, BlockLayout):
+                obj = obj.parent
+            obj.children_dirty = True
             self.set_needs_render()
 
     def submit_form(self, elt):
