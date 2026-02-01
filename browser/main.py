@@ -90,12 +90,19 @@ SHOW_COMPOSITED_LAYER_BORDERS = False
 
 
 class ProtectedField:
-    def __init__(self, obj, name):
+    def __init__(self, obj, name, parent=None):
         self.obj = obj
         self.name = name
         self.value = None
         self.dirty = True
         self.invalidations = set()
+        self.parent = parent
+
+    def set_ancestor_dirty_bits(self):
+        parent = self.parent
+        while parent and not parent.has_dirty_descendants:
+            parent.has_dirty_descendants = True
+            parent = parent.parent
 
     def __repr__(self):
         return "ProtectedField({}, {})".format(
@@ -106,6 +113,7 @@ class ProtectedField:
         if self.dirty:
             return
         self.dirty = True
+        self.set_ancestor_dirty_bits()
 
     def get(self):
         assert not self.dirty
@@ -1523,6 +1531,7 @@ class DocumentLayout:
         self.x = ProtectedField(self, "x")
         self.y = ProtectedField(self, "y")
         self.height = ProtectedField(self, "height")
+        self.has_dirty_descendants = False
 
     def layout(self, width, zoom):
         if self.children.dirty:
@@ -1539,6 +1548,23 @@ class DocumentLayout:
         child.layout()
         self.height.copy(child.height)
 
+    def layout_needed(self):
+        if self.zoom.dirty:
+            return True
+        if self.width.dirty:
+            return True
+        if self.height.dirty:
+            return True
+        if self.x.dirty:
+            return True
+        if self.y.dirty:
+            return True
+        if self.children.dirty:
+            return True
+        if self.has_dirty_descendants:
+            return True
+        return False
+
     def should_paint(self):
         return True
 
@@ -1554,19 +1580,19 @@ class BlockLayout:
         self.node = node
         self.parent = parent
         self.previous = previous
-        self.children = ProtectedField(self, "children")
-        self.x = ProtectedField(self, "x")
-        self.y = ProtectedField(self, "y")
-        self.zoom = ProtectedField(self, "zoom")
-        self.width = ProtectedField(self, "width")
-        self.height = ProtectedField(self, "height")
+        self.children = ProtectedField(self, "children", self.parent)
+        self.x = ProtectedField(self, "x", self.parent)
+        self.y = ProtectedField(self, "y", self.parent)
+        self.width = ProtectedField(self, "width", self.parent)
+        self.height = ProtectedField(self, "height", self.parent)
         self.cursor_x = 0
         self.cursor_y = 0
         node.layout_object = self
         self.frame = frame
         self.children_dirty = True
-        self.zoom = ProtectedField(self, "zoom")
+        self.zoom = ProtectedField(self, "zoom", self.parent)
         self.parent.zoom.invalidations.add(self.zoom)
+        self.has_dirty_descendants = False
 
     def self_rect(self):
         return skia.Rect.MakeLTRB(
@@ -1609,7 +1635,26 @@ class BlockLayout:
         else:
             return "block"
 
+    def layout_needed(self):
+        if self.zoom.dirty:
+            return True
+        if self.width.dirty:
+            return True
+        if self.height.dirty:
+            return True
+        if self.x.dirty:
+            return True
+        if self.y.dirty:
+            return True
+        if self.children.dirty:
+            return True
+        if self.has_dirty_descendants:
+            return True
+        return False
+
     def layout(self):
+        if not self.layout_needed():
+            return
         self.zoom.copy(self.parent.zoom)
         self.x.copy(self.parent.x)
         self.width.copy(self.parent.width)
@@ -1641,6 +1686,7 @@ class BlockLayout:
         for child in self.children.get():
             child.zoom.mark()
             child.layout()
+        self.has_dirty_descendants = False
         assert not self.children.dirty
         children = self.children.read(notify=self.height)
         new_height = sum([child.height.read(notify=self.height) for child in children])
@@ -1765,6 +1811,24 @@ class LineLayout:
         self.y = ProtectedField(self, "y")
         self.ascent = ProtectedField(self, "ascent")
         self.descent = ProtectedField(self, "descent")
+        self.has_dirty_descendants = False
+
+    def layout_needed(self):
+        if self.zoom.dirty:
+            return True
+        if self.width.dirty:
+            return True
+        if self.height.dirty:
+            return True
+        if self.x.dirty:
+            return True
+        if self.y.dirty:
+            return True
+        if self.children.dirty:
+            return True
+        if self.has_dirty_descendants:
+            return True
+        return False
 
     def layout(self):
         self.zoom.copy(self.parent.zoom)
@@ -1862,6 +1926,7 @@ class EmbedLayout:
         self.font = ProtectedField(self, "font")
         self.ascent = ProtectedField(self, "ascent")
         self.descent = ProtectedField(self, "descent")
+        self.has_dirty_descendants = False
 
     def self_rect(self):
         return skia.Rect.MakeLTRB(
@@ -1870,6 +1935,23 @@ class EmbedLayout:
             self.x.get() + self.width.get(),
             self.y.get() + self.height.get(),
         )
+
+    def layout_needed(self):
+        if self.zoom.dirty:
+            return True
+        if self.width.dirty:
+            return True
+        if self.height.dirty:
+            return True
+        if self.x.dirty:
+            return True
+        if self.y.dirty:
+            return True
+        if self.children.dirty:
+            return True
+        if self.has_dirty_descendants:
+            return True
+        return False
 
     def layout(self):
         self.zoom.copy(self.parent.zoom)
@@ -1924,6 +2006,7 @@ class IframeLayout(EmbedLayout):
         if self.node.frame:
             self.node.frame.frame_height = self.height - dpx(2, self.zoom.get())
             self.node.frame.frame_width = self.width - dpx(2, self.zoom.get())
+            self.node.frame.document.width.mark()
 
     def paint(self):
         cmds = []
@@ -2069,12 +2152,30 @@ class TextLayout:
         self.zoom = ProtectedField(self, "zoom")
         node.layout_object = self
         self.width = ProtectedField(self, "width")
+        self.has_dirty_descendants = False
 
     def self_rect(self):
         width = (
             self.width.get() if isinstance(self.width, ProtectedField) else self.width
         )
         return skia.Rect.MakeLTRB(self.x, self.y, self.x + width, self.y + self.height)
+
+    def layout_needed(self):
+        if self.zoom.dirty:
+            return True
+        if self.width.dirty:
+            return True
+        if self.height.dirty:
+            return True
+        if self.x.dirty:
+            return True
+        if self.y.dirty:
+            return True
+        if self.children.dirty:
+            return True
+        if self.has_dirty_descendants:
+            return True
+        return False
 
     def layout(self):
         self.zoom.copy(self.parent.zoom)
@@ -3385,12 +3486,16 @@ class Tab:
             self.scroll *= 1 / 1.1
         self.scroll_changed_in_tab = True
         self.set_needs_render()
+        for id, frame in self.window_id_to_frame.items():
+            frame.document.zoom.mark()
 
     def reset_zoom(self):
         self.scroll /= self.zoom
         self.zoom = 1
         self.scroll_changed_in_tab = True
         self.set_needs_render()
+        for id, frame in self.window_id_to_frame.items():
+            frame.document.zoom.mark()
 
     def clamp_scroll(self, scroll):
         height = math.ceil(self.root_frame.document.height.get() + 2 * VSTEP)
