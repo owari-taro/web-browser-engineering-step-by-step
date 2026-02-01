@@ -1508,6 +1508,9 @@ class DocumentLayout:
         self.children = ProtectedField()
         node.layout_object = self
         self.width = ProtectedField()
+        self.x = ProtectedField()
+        self.y = ProtectedField()
+        self.height = ProtectedField()
 
     def layout(self, width, zoom):
         if self.children.dirty:
@@ -1519,10 +1522,10 @@ class DocumentLayout:
         self.zoom.set(zoom)
         child.zoom.mark()
         self.width.set(width - 2 * dpx(HSTEP, zoom))
-        self.x = dpx(HSTEP, self.zoom)
-        self.y = dpx(VSTEP, self.zoom)
+        self.x.set(dpx(HSTEP, zoom))
+        self.y.set(dpx(VSTEP, zoom))
         child.layout()
-        self.height = child.height
+        self.height.copy(child.height)
 
     def should_paint(self):
         return True
@@ -1540,10 +1543,11 @@ class BlockLayout:
         self.parent = parent
         self.previous = previous
         self.children = ProtectedField()
-        self.x = None
-        self.y = None
+        self.x = ProtectedField()
+        self.y = ProtectedField()
         self.zoom = ProtectedField()
         self.width = ProtectedField()
+        self.height = ProtectedField()
         self.cursor_x = 0
         self.cursor_y = 0
         node.layout_object = self
@@ -1592,12 +1596,14 @@ class BlockLayout:
 
     def layout(self):
         self.zoom.copy(self.parent.zoom)
-        self.x = self.parent.x
+        self.x.copy(self.parent.x)
         self.width.copy(self.parent.width)
         if self.previous:
-            self.y = self.previous.y + self.previous.height
+            prev_y = self.previous.y.read(notify=self.y)
+            prev_height = self.previous.height.read(notify=self.y)
+            self.y.set(prev_y + prev_height)
         else:
-            self.y = self.parent.y
+            self.y.copy(self.parent.y)
         mode = self.layout_mode()
         if mode == "block":
             if self.children.dirty:
@@ -1621,7 +1627,9 @@ class BlockLayout:
             child.zoom.mark()
             child.layout()
         assert not self.children.dirty
-        self.height = sum([child.height for child in self.children.get()])
+        children = self.children.read(notify=self.height)
+        new_height = sum([child.height.read(notify=self.height) for child in children])
+        self.height.set(new_height)
 
     def flush(self):
         # 行内の最大アセントを計算
