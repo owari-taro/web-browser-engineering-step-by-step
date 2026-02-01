@@ -120,8 +120,6 @@ class ProtectedField:
         return self.value
 
     def set(self, value):
-        if self.value != None:
-            print("Change", self)
         if value != self.value:
             self.notify()
         self.value = value
@@ -137,6 +135,11 @@ class ProtectedField:
 
     def copy(self, field):
         self.set(field.read(notify=self))
+
+
+def dirty_style(node):
+    for property, value in node.style.items():
+        value.mark()
 
 
 class JSContext:
@@ -303,7 +306,7 @@ class JSContext:
         self.throw_if_cross_origin(frame)
         elt = self.handle_to_node[handle]
         elt.attributes["style"] = s
-        elt.style.mark()
+        dirty_style(elt)
         frame.set_needs_render()
 
     def run(self, script, code, window_id):
@@ -510,13 +513,13 @@ def parse_image_rendering(quality):
 
 
 def paint_visual_effects(node, cmds, rect):
-    translation = parse_transform(node.style.get().get("transform", ""))
-    opacity = float(node.style.get().get("opacity", "1.0"))
-    blend_mode = node.style.get().get("mix-blend-mode")
-    if node.style.get().get("overflow", "visible") == "clip":
+    opacity = float(node.style["opacity"].get())
+    blend_mode = node.style["mix-blend-mode"].get()
+    translation = parse_transform(node.style["transform"].get())
+    if node.style["overflow"].get() == "clip":
         if not blend_mode:
             blend_mode = "source-over"
-        border_radius = float(node.style.get().get("border-radius", "0px")[:-2])
+        border_radius = float(node.style["border-radius"].get()[:-2])
         cmds.append(
             Blend(
                 1.0, "destination-in", node, [DrawRRect(rect, border_radius, "white")]
@@ -602,7 +605,7 @@ def absolute_bounds_for_obj(obj):
     cur = obj.node
     while cur:
         style = cur.style.get() if isinstance(cur.style, ProtectedField) else cur.style
-        rect = map_translation(rect, parse_transform(style.get("transform", "")))
+        rect = map_translation(rect, parse_transform(style["transform"].get()))
         cur = cur.parent
     return rect
 
@@ -701,14 +704,15 @@ def get_font(size, weight, style):
     return skia.Font(FONTS[key], size)
 
 
-def font(style, zoom):
-    if isinstance(style, ProtectedField):
-        style = style.get()
-    weight = style["font-weight"]
-    variant = style["font-style"]
-    size = float(style["font-size"][:-2]) * 0.75
+def font(css_style, zoom, notify):
+    weight = css_style["font-weight"].read(notify)
+    style = css_style["font-style"].read(notify)
+    try:
+        size = float(css_style["font-size"].read(notify)[:-2]) * 0.75
+    except:
+        size = 16
     font_size = dpx(size, zoom)
-    return get_font(font_size, weight, variant)
+    return get_font(font_size, weight, style)
 
 
 class URL:
@@ -881,12 +885,31 @@ def get_tabindex(node):
     return 9999999 if tabindex == 0 else tabindex
 
 
+CSS_PROPERTIES = {
+    "font-size": "inherit",
+    "font-weight": "inherit",
+    "font-style": "inherit",
+    "color": "inherit",
+    "opacity": "1.0",
+    "transition": "",
+    "transform": "none",
+    "mix-blend-mode": None,
+    "border-radius": "0px",
+    "overflow": "visible",
+    "outline": "none",
+    "background-color": "transparent",
+    "image-rendering": "auto",
+}
+
+
 class Text:
     def __init__(self, text, parent):
         self.text = text
         self.children = []
         self.parent = parent
-        self.style = ProtectedField(self, "style")
+        self.style = dict(
+            [(property, ProtectedField(self, property)) for property in CSS_PROPERTIES]
+        )
         self.animations = {}
         self.is_focused = False
         self.layout_object = None
@@ -902,7 +925,9 @@ class Element:
         self.children = []
         self.parent = parent
         self.is_focused = False
-        self.style = ProtectedField(self, "style")
+        self.style = dict(
+            [(property, ProtectedField(self, property)) for property in CSS_PROPERTIES]
+        )
         self.animations = {}
         self.layout_object = None
         self.encoded_data = None
@@ -1434,13 +1459,17 @@ class CSSParser:
 
 
 def style(node, rules, frame):
-    if node.style.dirty:
-        old_style = node.style.value
-        new_style = {}
+    needs_style = any([field.dirty for field in node.style.values()])
+    if needs_style:
+        old_style = dict(
+            [(property, field.value) for property, field in node.style.items()]
+        )
+        new_style = CSS_PROPERTIES.copy()
         for property, default_value in INHERITED_PROPERTIES.items():
             if node.parent:
-                parent_style = node.parent.style.read(notify=node.style)
-                new_style[property] = parent_style[property]
+                parent_field = node.parent.style[property]
+                parent_value = parent_field.read(notify=node.style[property])
+                new_style[property] = parent_value
             else:
                 new_style[property] = default_value
         for media, selector, body in rules:
@@ -1457,22 +1486,24 @@ def style(node, rules, frame):
                 new_style[property] = value
         if new_style["font-size"].endswith("%"):
             if node.parent:
-                parent_font_size = node.parent.style.get()["font-size"]
+                parent_field = node.parent.style["font-size"]
+                parent_font_size = parent_field.read(notify=node.style["font-size"])
             # ルートのhtml要素のとき(node.parentがないとき)
             else:
                 parent_font_size = INHERITED_PROPERTIES["font-size"]
             node_pct = float(new_style["font-size"][:-1]) / 100
             parent_px = float(parent_font_size[:-2])
             new_style["font-size"] = str(node_pct * parent_px) + "px"
-        node.style.set(new_style)
+        for property, field in node.style.items():
+            field.set(new_style[property])
         if old_style:
-            transitions = diff_styles(old_style, node.style.get())
+            transitions = diff_styles(old_style, new_style)
             for property, (old_value, new_value, num_frames) in transitions.items():
                 if property == "opacity":
                     frame.set_needs_render()
                     animation = NumericAnimation(old_value, new_value, num_frames)
                     node.animations[property] = animation
-                    node.style.get()[property] = animation.animate()
+                    node.style[property].set(animation.animate())
     for child in node.children:
         style(child, rules, frame)
 
@@ -1499,7 +1530,9 @@ def parse_transform(transform_str):
 
 def diff_styles(old_style, new_style):
     transitions = {}
-    for property, num_frames in parse_transition(new_style.get("transition")).items():
+    for property, num_frames in parse_transition(
+        new_style.get("transition", "")
+    ).items():
         if property not in old_style:
             continue
         if property not in new_style:
@@ -1616,7 +1649,9 @@ class BlockLayout:
         children = line.children.get()
         children.append(child)
         line.children.set(children)
-        self.cursor_x += w + font(node.style, self.zoom).measureText(" ")
+        self.cursor_x += w + font(
+            node.style, self.zoom, notify=self.children
+        ).measureText(" ")
 
     def layout_mode(self):
         if isinstance(self.node, Text):
@@ -1714,7 +1749,7 @@ class BlockLayout:
 
     def word(self, node, word):
         zoom = self.zoom.read(notify=self.children)
-        node_font = font(node.style, zoom)
+        node_font = font(node.style, zoom, notify=self.children)
         w = node_font.measureText(word)
         self.add_inline_child(node, w, TextLayout, self.frame, word)
 
@@ -1777,9 +1812,9 @@ class BlockLayout:
             x2, y2 = self.x + self.width.get(), self.y + self.height
             rect = DrawRect(skia.Rect.MakeLTRB(self.x, self.y, x2, y2), "gray")
             cmds.append(rect)
-        bgcolor = self.node.style.get().get("background-color", "transparent")
+        bgcolor = self.node.style["background-color"].get()
         if bgcolor != "transparent":
-            radius = float(self.node.style.get().get("border-radius", "0px")[:-2])
+            radius = float(self.node.style["border-radius"].get()[:-2])
             cmds.append(DrawRRect(self.self_rect(), radius, bgcolor))
         if self.node.is_focused and "contenteditable" in self.node.attributes:
             text_nodes = [
@@ -1883,7 +1918,7 @@ class LineLayout:
         outline_rect = skia.Rect.MakeEmpty()
         outline_node = None
         for child in self.children.get():
-            outline_str = child.node.parent.style.get().get("outline")
+            outline_str = child.node.parent.style["outline"].get()
             if parse_outline(outline_str):
                 outline_rect.join(child.self_rect())
                 outline_node = child.node.parent
@@ -1901,7 +1936,7 @@ INPUT_WIDTH_PX = 200
 
 
 def paint_outline(node, cmds, rect, zoom):
-    outline = parse_outline(node.style.get().get("outline"))
+    outline = parse_outline(node.style["outline"].get())
     if not outline:
         return
     thickness, color = outline
@@ -1955,7 +1990,7 @@ class EmbedLayout:
 
     def layout(self):
         self.zoom.copy(self.parent.zoom)
-        self.font.set(font(self.node.style, self.zoom))
+        self.font.set(font(self.node.style, self.zoom, self.font))
         if self.previous:
             space = self.previous.font.get().measureText(" ")
             self.x.set(self.previous.x.get() + space + self.previous.width.get())
@@ -2013,11 +2048,9 @@ class IframeLayout(EmbedLayout):
         rect = skia.Rect.MakeLTRB(
             self.x, self.y, self.x + self.width, self.y + self.height
         )
-        bgcolor = self.node.style.get("background-color", "transparent")
+        bgcolor = self.node.style["background-color"].get()
         if bgcolor != "transparent":
-            radius = dpx(
-                float(self.node.style.get("border-radius", "0px")[:-2]), self.zoom
-            )
+            radius = dpx(float(self.node.style["border-radius"].get()[:-2]), self.zoom)
             cmds.append(DrawRRect(rect, radius, bgcolor))
         return cmds
 
@@ -2064,11 +2097,9 @@ class InputLayout(EmbedLayout):
         cmds = []
         text = ""
 
-        bgcolor = self.node.style.get().get("background-color", "transparent")
+        bgcolor = self.node.style["background-color"].get()
         if bgcolor != "transparent":
-            radius = dpx(
-                float(self.node.style.get().get("border-radius", "0px")[:-2]), self.zoom
-            )
+            radius = dpx(float(self.node.style["border-radius"].get()[:-2]), self.zoom)
             cmds.append(DrawRRect(self.self_rect(), radius, bgcolor))
 
         if self.node.tag == "input":
@@ -2080,7 +2111,7 @@ class InputLayout(EmbedLayout):
                 print("Ignoring HTML contents inside button")
                 text = ""
 
-        color = self.node.style.get()["color"]
+        color = self.node.style["color"].get()
         cmds.append(DrawText(self.x.get(), self.y.get(), text, self.font.get(), color))
 
         if self.node.is_focused and self.node.tag == "input":
@@ -2130,7 +2161,7 @@ class ImageLayout(EmbedLayout):
             self.x + self.width.get(),
             self.y + self.height,
         )
-        quality = self.node.style.get().get("image-rendering", "auto")
+        quality = self.node.style["image-rendering"].get()
         cmds.append(DrawImage(self.node.image, rect, quality))
         return cmds
 
@@ -2187,27 +2218,27 @@ class TextLayout:
         else:
             self.x.copy(self.parent.x)
 
-        zoom = self.zoom.read(notify=self.font)
-        style = self.node.style.read(notify=self.font)
-        self.font.set(font(style, zoom))
+        if self.font.dirty:
+            zoom = self.zoom.read(notify=self.font)
+            self.font.set(font(self.node.style, zoom, notify=self.font))
 
-        f = self.font.read(notify=self.width)
-        self.width.set(f.measureText(self.word))
+            f = self.font.read(notify=self.width)
+            self.width.set(f.measureText(self.word))
 
-        f = self.font.read(notify=self.ascent)
-        self.ascent.set(f.getMetrics().fAscent * 1.25)
+            f = self.font.read(notify=self.ascent)
+            self.ascent.set(f.getMetrics().fAscent * 1.25)
 
-        f = self.font.read(notify=self.descent)
-        self.descent.set(f.getMetrics().fDescent * 1.25)
+            f = self.font.read(notify=self.descent)
+            self.descent.set(f.getMetrics().fDescent * 1.25)
 
-        f = self.font.read(notify=self.height)
-        self.height.set(linespace(f) * 1.25)
+            f = self.font.read(notify=self.height)
+            self.height.set(linespace(f) * 1.25)
 
     def should_paint(self):
         return True
 
     def paint(self):
-        color = self.node.style.get()["color"]
+        color = self.node.style["color"].get()
         return [DrawText(self.x.get(), self.y.get(), self.word, self.font.get(), color)]
 
     def paint_effects(self, cmds):
@@ -3187,12 +3218,14 @@ class Frame:
             self.needs_focus_scroll = True
         if self.tab.focus:
             self.tab.focus.is_focused = False
+            dirty_style(self.tab.focus)
         self.tab.focus = node
         if self.tab.focused_frame and self.tab.focused_frame != self:
             self.tab.focused_frame.set_needs_render()
         self.tab.focused_frame = self
         if node:
             node.is_focused = True
+            dirty_style(node)
         self.set_needs_render()
 
     def render(self):
@@ -3532,29 +3565,24 @@ class Tab:
         self.scroll = min(self.scroll + SCROLL_STEP, max_y)
 
     def run_animation_frame(self, scroll):
-        self.render()
-        root_frame_focused = (
-            not self.focused_frame or self.focused_frame == self.root_frame
-        )
-        for window_id, frame in self.window_id_to_frame.items():
-            if not frame.loaded:
-                continue
-            frame.js.dispatch_RAF(frame.window_id)
-
-        for node in tree_to_list(self.root_frame.nodes, []):
-            for property_name, animation in node.animations.items():
-                value = animation.animate()
-                if value:
-                    node.style[property_name] = value
-                    self.composited_updates.append(node)
-                    self.set_needs_paint()
-
         needs_composite = False
         for window_id, frame in self.window_id_to_frame.items():
             if not frame.loaded:
                 continue
+            for node in tree_to_list(frame.nodes, []):
+                for property_name, animation in node.animations.items():
+                    value = animation.animate()
+                    if value:
+                        node.style[property_name].set(value)
+                        self.composited_updates.append(node)
+                        self.set_needs_paint()
             if frame.needs_style or frame.needs_layout:
                 needs_composite = True
+
+        self.render()
+        root_frame_focused = (
+            not self.focused_frame or self.focused_frame == self.root_frame
+        )
 
         if self.needs_focus_scroll and self.focus:
             self.scroll_to(self.focus)
