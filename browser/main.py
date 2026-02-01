@@ -90,10 +90,17 @@ SHOW_COMPOSITED_LAYER_BORDERS = False
 
 
 class ProtectedField:
-    def __init__(self):
+    def __init__(self, obj, name):
+        self.obj = obj
+        self.name = name
         self.value = None
         self.dirty = True
         self.invalidations = set()
+
+    def __repr__(self):
+        return "ProtectedField({}, {})".format(
+            self.obj.node if hasattr(self.obj, "node") else self.obj, self.name
+        )
 
     def mark(self):
         if self.dirty:
@@ -105,7 +112,10 @@ class ProtectedField:
         return self.value
 
     def set(self, value):
-        self.notify()
+        if self.value != None:
+            print("Change", self)
+        if value != self.value:
+            self.notify()
         self.value = value
         self.dirty = False
 
@@ -868,7 +878,7 @@ class Text:
         self.text = text
         self.children = []
         self.parent = parent
-        self.style = ProtectedField()
+        self.style = ProtectedField(self, "style")
         self.animations = {}
         self.is_focused = False
         self.layout_object = None
@@ -884,7 +894,7 @@ class Element:
         self.children = []
         self.parent = parent
         self.is_focused = False
-        self.style = ProtectedField()
+        self.style = ProtectedField(self, "style")
         self.animations = {}
         self.layout_object = None
         self.encoded_data = None
@@ -1416,46 +1426,47 @@ class CSSParser:
 
 
 def style(node, rules, frame):
-    old_style = node.style.value
-    new_style = {}
-    for property, default_value in INHERITED_PROPERTIES.items():
-        if node.parent:
-            parent_style = node.parent.style.read(notify=node.style)
-            new_style[property] = parent_style[property]
-        else:
-            new_style[property] = default_value
-    for media, selector, body in rules:
-        if media:
-            if (media == "dark") != frame.tab.dark_mode:
+    if node.style.dirty:
+        old_style = node.style.value
+        new_style = {}
+        for property, default_value in INHERITED_PROPERTIES.items():
+            if node.parent:
+                parent_style = node.parent.style.read(notify=node.style)
+                new_style[property] = parent_style[property]
+            else:
+                new_style[property] = default_value
+        for media, selector, body in rules:
+            if media:
+                if (media == "dark") != frame.tab.dark_mode:
+                    continue
+            if not selector.matches(node):
                 continue
-        if not selector.matches(node):
-            continue
-        for property, value in body.items():
-            new_style[property] = value
-    if isinstance(node, Element) and "style" in node.attributes:
-        pairs = CSSParser(node.attributes["style"]).body()
-        for property, value in pairs.items():
-            new_style[property] = value
-    if new_style["font-size"].endswith("%"):
-        if node.parent:
-            parent_font_size = node.parent.style.get()["font-size"]
-        # ルートのhtml要素のとき(node.parentがないとき)
-        else:
-            parent_font_size = INHERITED_PROPERTIES["font-size"]
-        node_pct = float(new_style["font-size"][:-1]) / 100
-        parent_px = float(parent_font_size[:-2])
-        new_style["font-size"] = str(node_pct * parent_px) + "px"
-    node.style.set(new_style)
+            for property, value in body.items():
+                new_style[property] = value
+        if isinstance(node, Element) and "style" in node.attributes:
+            pairs = CSSParser(node.attributes["style"]).body()
+            for property, value in pairs.items():
+                new_style[property] = value
+        if new_style["font-size"].endswith("%"):
+            if node.parent:
+                parent_font_size = node.parent.style.get()["font-size"]
+            # ルートのhtml要素のとき(node.parentがないとき)
+            else:
+                parent_font_size = INHERITED_PROPERTIES["font-size"]
+            node_pct = float(new_style["font-size"][:-1]) / 100
+            parent_px = float(parent_font_size[:-2])
+            new_style["font-size"] = str(node_pct * parent_px) + "px"
+        node.style.set(new_style)
+        if old_style:
+            transitions = diff_styles(old_style, node.style.get())
+            for property, (old_value, new_value, num_frames) in transitions.items():
+                if property == "opacity":
+                    frame.set_needs_render()
+                    animation = NumericAnimation(old_value, new_value, num_frames)
+                    node.animations[property] = animation
+                    node.style.get()[property] = animation.animate()
     for child in node.children:
         style(child, rules, frame)
-    if old_style:
-        transitions = diff_styles(old_style, node.style.get())
-        for property, (old_value, new_value, num_frames) in transitions.items():
-            if property == "opacity":
-                frame.set_needs_render()
-                animation = NumericAnimation(old_value, new_value, num_frames)
-                node.animations[property] = animation
-                node.style.get()[property] = animation.animate()
 
 
 def parse_transition(value):
@@ -1504,14 +1515,14 @@ class DocumentLayout:
     def __init__(self, node, frame):
         self.node = node
         self.frame = frame
-        self.zoom = ProtectedField()
+        self.zoom = ProtectedField(self, "zoom")
         self.parent = None
-        self.children = ProtectedField()
+        self.children = ProtectedField(self, "children")
         node.layout_object = self
-        self.width = ProtectedField()
-        self.x = ProtectedField()
-        self.y = ProtectedField()
-        self.height = ProtectedField()
+        self.width = ProtectedField(self, "width")
+        self.x = ProtectedField(self, "x")
+        self.y = ProtectedField(self, "y")
+        self.height = ProtectedField(self, "height")
 
     def layout(self, width, zoom):
         if self.children.dirty:
@@ -1543,18 +1554,18 @@ class BlockLayout:
         self.node = node
         self.parent = parent
         self.previous = previous
-        self.children = ProtectedField()
-        self.x = ProtectedField()
-        self.y = ProtectedField()
-        self.zoom = ProtectedField()
-        self.width = ProtectedField()
-        self.height = ProtectedField()
+        self.children = ProtectedField(self, "children")
+        self.x = ProtectedField(self, "x")
+        self.y = ProtectedField(self, "y")
+        self.zoom = ProtectedField(self, "zoom")
+        self.width = ProtectedField(self, "width")
+        self.height = ProtectedField(self, "height")
         self.cursor_x = 0
         self.cursor_y = 0
         node.layout_object = self
         self.frame = frame
         self.children_dirty = True
-        self.zoom = ProtectedField()
+        self.zoom = ProtectedField(self, "zoom")
         self.parent.zoom.invalidations.add(self.zoom)
 
     def self_rect(self):
@@ -1744,16 +1755,16 @@ class LineLayout:
         self.node = node
         self.parent = parent
         self.previous = previous
-        self.children = ProtectedField()
+        self.children = ProtectedField(self, "children")
         self.children.set([])
         node.layout_object = self
-        self.zoom = ProtectedField()
-        self.width = ProtectedField()
-        self.height = ProtectedField()
-        self.x = ProtectedField()
-        self.y = ProtectedField()
-        self.ascent = ProtectedField()
-        self.descent = ProtectedField()
+        self.zoom = ProtectedField(self, "zoom")
+        self.width = ProtectedField(self, "width")
+        self.height = ProtectedField(self, "height")
+        self.x = ProtectedField(self, "x")
+        self.y = ProtectedField(self, "y")
+        self.ascent = ProtectedField(self, "ascent")
+        self.descent = ProtectedField(self, "descent")
 
     def layout(self):
         self.zoom.copy(self.parent.zoom)
@@ -1836,21 +1847,21 @@ def paint_outline(node, cmds, rect, zoom):
 class EmbedLayout:
     def __init__(self, node, parent, previous, frame=None):
         self.node = node
-        self.children = ProtectedField()
+        self.children = ProtectedField(self, "children")
         self.children.set([])
         self.parent = parent
         self.previous = previous
-        self.x = ProtectedField()
-        self.y = ProtectedField()
+        self.x = ProtectedField(self, "x")
+        self.y = ProtectedField(self, "y")
         self.width = None
         self.height = None
         node.layout_object = self
-        self.zoom = ProtectedField()
-        self.width = ProtectedField()
-        self.height = ProtectedField()
-        self.font = ProtectedField()
-        self.ascent = ProtectedField()
-        self.descent = ProtectedField()
+        self.zoom = ProtectedField(self, "zoom")
+        self.width = ProtectedField(self, "width")
+        self.height = ProtectedField(self, "height")
+        self.font = ProtectedField(self, "font")
+        self.ascent = ProtectedField(self, "ascent")
+        self.descent = ProtectedField(self, "descent")
 
     def self_rect(self):
         return skia.Rect.MakeLTRB(
@@ -2045,19 +2056,19 @@ class TextLayout:
     def __init__(self, node, word, parent, previous):
         self.node = node
         self.word = word
-        self.children = ProtectedField()
+        self.children = ProtectedField(self, "children")
         self.children.set([])
         self.parent = parent
         self.previous = previous
-        self.x = ProtectedField()
-        self.y = ProtectedField()
-        self.height = ProtectedField()
-        self.font = ProtectedField()
-        self.ascent = ProtectedField()
-        self.descent = ProtectedField()
-        self.zoom = ProtectedField()
+        self.x = ProtectedField(self, "x")
+        self.y = ProtectedField(self, "y")
+        self.height = ProtectedField(self, "height")
+        self.font = ProtectedField(self, "font")
+        self.ascent = ProtectedField(self, "ascent")
+        self.descent = ProtectedField(self, "descent")
+        self.zoom = ProtectedField(self, "zoom")
         node.layout_object = self
-        self.width = ProtectedField()
+        self.width = ProtectedField(self, "width")
 
     def self_rect(self):
         width = (
@@ -3484,7 +3495,6 @@ class Tab:
         if self.needs_accessibility:
             self.accessibility_tree = AccessibilityNode(self.root_frame.nodes)
             self.accessibility_tree.build()
-            print_tree(self.accessibility_tree)
             self.needs_accessibility = False
             self.needs_paint = True
 
