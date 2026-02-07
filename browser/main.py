@@ -207,11 +207,14 @@ class CompositedLayer:
         irect = bounds.roundOut()
 
         if not self.surface:
-            self.surface = skia.Surface.MakeRenderTarget(
-                self.skia_context,
-                skia.Budgeted.kNo,
-                skia.ImageInfo.MakeN32Premul(irect.width(), irect.height()),
-            )
+            if self.skia_context:
+                self.surface = skia.Surface.MakeRenderTarget(
+                    self.skia_context,
+                    skia.Budgeted.kNo,
+                    skia.ImageInfo.MakeN32Premul(irect.width(), irect.height()),
+                )
+            else:
+                self.surface = skia.Surface(irect.width(), irect.height())
             assert self.surface
         canvas = self.surface.getCanvas()
         canvas.clear(skia.ColorTRANSPARENT)
@@ -1613,6 +1616,15 @@ class Browser:
         self.active_tab_display_list = None
         self.composited_layers = []
         self.draw_list = []
+
+        sdl2.SDL_GL_SetAttribute(sdl2.SDL_GL_CONTEXT_MAJOR_VERSION, 3)
+        sdl2.SDL_GL_SetAttribute(sdl2.SDL_GL_CONTEXT_MINOR_VERSION, 2)
+        sdl2.SDL_GL_SetAttribute(sdl2.SDL_GL_CONTEXT_FORWARD_COMPATIBLE_FLAG, True)
+        sdl2.SDL_GL_SetAttribute(
+            sdl2.SDL_GL_CONTEXT_PROFILE_MASK, sdl2.SDL_GL_CONTEXT_PROFILE_CORE
+        )
+        sdl2.SDL_GL_SetAttribute(sdl2.SDL_GL_STENCIL_SIZE, 8)
+
         self.sdl_window = sdl2.SDL_CreateWindow(
             b"Browser",
             sdl2.SDL_WINDOWPOS_CENTERED,
@@ -1622,14 +1634,8 @@ class Browser:
             sdl2.SDL_WINDOW_SHOWN | sdl2.SDL_WINDOW_OPENGL,
         )
 
-        sdl2.SDL_GL_SetAttribute(sdl2.SDL_GL_CONTEXT_MAJOR_VERSION, 3)
-        sdl2.SDL_GL_SetAttribute(sdl2.SDL_GL_CONTEXT_MINOR_VERSION, 2)
-        sdl2.SDL_GL_SetAttribute(sdl2.SDL_GL_CONTEXT_FORWARD_COMPATIBLE_FLAG, True)
-        sdl2.SDL_GL_SetAttribute(
-            sdl2.SDL_GL_CONTEXT_PROFILE_MASK, sdl2.SDL_GL_CONTEXT_PROFILE_CORE
-        )
-
         self.gl_context = sdl2.SDL_GL_CreateContext(self.sdl_window)
+        sdl2.SDL_GL_MakeCurrent(self.sdl_window, self.gl_context)
         print(
             ("OpenGL initialized: vendor={}," + "renderer={}").format(
                 OpenGL.GL.glGetString(OpenGL.GL.GL_VENDOR),
@@ -1637,15 +1643,21 @@ class Browser:
             )
         )
         self.skia_context = skia.GrDirectContext.MakeGL()
-        self.root_surface = skia.Surface.MakeFromBackendRenderTarget(
-            self.skia_context,
-            skia.GrBackendRenderTarget(
-                WIDTH, HEIGHT, 0, 0, skia.GrGLFramebufferInfo(0, OpenGL.GL.GL_RGBA8)
-            ),
-            skia.kBottomLeft_GrSurfaceOrigin,
-            skia.kRGBA_8888_ColorType,
-            skia.ColorSpace.MakeSRGB(),
-        )
+        if self.skia_context:
+            self.root_surface = skia.Surface.MakeFromBackendRenderTarget(
+                self.skia_context,
+                skia.GrBackendRenderTarget(
+                    WIDTH, HEIGHT, 0, 0, skia.GrGLFramebufferInfo(0, OpenGL.GL.GL_RGBA8)
+                ),
+                skia.kBottomLeft_GrSurfaceOrigin,
+                skia.kRGBA_8888_ColorType,
+                skia.ColorSpace.MakeSRGB(),
+            )
+        else:
+            self.root_surface = None
+        if not self.root_surface:
+            self.skia_context = None
+            self.root_surface = skia.Surface(WIDTH, HEIGHT)
         assert self.root_surface is not None
 
         self.chrome = Chrome(self)
@@ -1661,11 +1673,14 @@ class Browser:
             self.ALPHA_MASK = 0xFF000000
         sdl2.SDL_StartTextInput()
 
-        self.chrome_surface = skia.Surface.MakeRenderTarget(
-            self.skia_context,
-            skia.Budgeted.kNo,
-            skia.ImageInfo.MakeN32Premul(WIDTH, math.ceil(self.chrome.bottom)),
-        )
+        if self.skia_context:
+            self.chrome_surface = skia.Surface.MakeRenderTarget(
+                self.skia_context,
+                skia.Budgeted.kNo,
+                skia.ImageInfo.MakeN32Premul(WIDTH, math.ceil(self.chrome.bottom)),
+            )
+        else:
+            self.chrome_surface = skia.Surface(WIDTH, math.ceil(self.chrome.bottom))
         assert self.chrome_surface is not None
         self.tab_surface = None
         self.needs_animation_frame = True
@@ -1888,7 +1903,18 @@ class Browser:
         canvas.restore()
 
         self.root_surface.flushAndSubmit()
-        sdl2.SDL_GL_SwapWindow(self.sdl_window)
+        if self.skia_context:
+            sdl2.SDL_GL_SwapWindow(self.sdl_window)
+        else:
+            image = self.root_surface.makeImageSnapshot()
+            pixels = image.tobytes()
+            sdl_surface = sdl2.SDL_CreateRGBSurfaceFrom(
+                pixels, WIDTH, HEIGHT, 32, WIDTH * 4,
+                self.RED_MASK, self.GREEN_MASK, self.BLUE_MASK, self.ALPHA_MASK)
+            window_surface = sdl2.SDL_GetWindowSurface(self.sdl_window)
+            sdl2.SDL_BlitSurface(sdl_surface, None, window_surface, None)
+            sdl2.SDL_UpdateWindowSurface(self.sdl_window)
+            sdl2.SDL_FreeSurface(sdl_surface)
 
     def schedule_load(self, url, body=None):
         self.active_tab.task_runner.clear_pending_tasks()
