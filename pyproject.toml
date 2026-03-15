@@ -22,3 +22,8 @@ dependencies = [
   "playsound==1.2.2",
   "pyobjc-framework-cocoa>=11.1; sys_platform == 'darwin'",
 ]
+
+[dependency-groups]
+dev = [
+    "pytest>=8.4.2",
+]
